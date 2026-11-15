@@ -1,0 +1,338 @@
+#!/usr/bin/env python3
+"""Opt-in POSIX qualification against an installed native Mistral Vibe.
+
+Run with the Python environment that supplies Vibe's upstream test dependencies
+(pytest, pexpect, pyte, tomli-w), an installed Vibe executable, and its matching
+source checkout. No dependency is downloaded by this test. For example:
+
+    python tests/vibe_native_qualification.py \
+        --vibe /absolute/path/to/bin/vibe \
+        --vibe-source /absolute/path/to/mistral-vibe \
+        --package /absolute/path/to/logonomic.cli.vibe \
+        --output-directory /absolute/path/to/new-evidence-directory
+
+The maintained upstream scripted provider exercises real native model turns,
+subagent creation, persistence, hooks, and interactive resume. All model requests
+use a loopback endpoint and a dummy key; the home, workspace, and SDK host fixture
+are test-owned. This qualifies the package boundary, not the Logonomic desktop.
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import hashlib
+import importlib.util
+import io
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+
+RESUME_PROMPT = "Continue the exact saved delegation conversation."
+RESUME_ANSWER = "Resumed the exact saved conversation."
+
+
+def require(condition, message):
+    if not condition:
+        raise AssertionError(message)
+
+
+def write_json(path, value):
+    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+
+
+def success(adapter, capability, version, operation, payload):
+    frame = adapter.invoke(capability, version, operation, payload)
+    require(frame["status"] == "success", frame)
+    return frame["payload"]
+
+
+def file_hashes(directory):
+    return {
+        str(path.relative_to(directory)): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in directory.rglob("*") if path.is_file()
+    }
+
+
+def capture_generation(session, destination):
+    for attempt in range(3):
+        target = destination / f"attempt-{attempt}" / "unified" / session.name
+        try:
+            pointer_bytes = (session / "CURRENT").read_bytes()
+            pointer = json.loads(pointer_bytes)
+            generation_path = Path("generations") / pointer["generation"]
+            shutil.copytree(session / generation_path, target / generation_path)
+            (target / "CURRENT").write_bytes(pointer_bytes)
+            shutil.copy2(session / "meta.json", target / "meta.json")
+            manifest = json.loads((target / generation_path / "manifest.json").read_text("utf-8"))
+            journal = Path(manifest["recovery_journal_segment"]["path"])
+            (target / journal).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(session / journal, target / journal)
+            require(pointer_bytes == (session / "CURRENT").read_bytes(), "Generation moved while copying")
+            final = destination / "unified"
+            target.parent.rename(final)
+            target.parent.parent.rmdir()
+            return final / session.name
+        except (OSError, AssertionError):
+            shutil.rmtree(destination / f"attempt-{attempt}", ignore_errors=True)
+    raise AssertionError(f"Could not capture a stable native generation at {session}")
+
+
+def runtime_state(session):
+    pointer = json.loads((session / "CURRENT").read_text("utf-8"))
+    generation = session / "generations" / pointer["generation"]
+    manifest_bytes = (generation / "manifest.json").read_bytes().rstrip(b"\n")
+    require(hashlib.sha256(manifest_bytes).hexdigest() == pointer["manifest_sha256"],
+            "Native CURRENT manifest digest disagrees")
+    manifest = json.loads(manifest_bytes)
+    descriptor = manifest["runtime_state"]
+    runtime_bytes = (generation / descriptor["path"]).read_bytes().rstrip(b"\n")
+    require(hashlib.sha256(runtime_bytes).hexdigest() == descriptor["sha256"],
+            "Native runtime-state digest disagrees")
+    return json.loads(runtime_bytes)
+
+
+def create_host_fixture(path, deliveries):
+    # A fresh process handles each SDK delivery; separate files keep concurrent
+    # child/root observations intact without a shared append protocol.
+    path.write_text(
+        f"#!{sys.executable}\n"
+        "import json, pathlib, sys, time, uuid\n"
+        f"root = pathlib.Path({str(deliveries)!r})\n"
+        "if sys.argv[1:] == ['provider-event', 'deliver', '--args-stdin']:\n"
+        "    delivery = json.load(sys.stdin)\n"
+        "    target = root / (str(time.time_ns()) + '-' + uuid.uuid4().hex + '.json')\n"
+        "    target.write_text(json.dumps(delivery), encoding='utf-8')\n"
+        "    print(json.dumps({'accepted': True, 'epoch': 1}))\n"
+        "elif len(sys.argv) == 4 and sys.argv[1:3] == ['provider-event', 'acknowledge']:\n"
+        "    (root / (sys.argv[3] + '.ack')).write_text('acknowledged', encoding='utf-8')\n"
+        "else:\n"
+        "    sys.exit(2)\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o700)
+
+
+def isolated_environment(home, native_home, vibe):
+    return {
+        "PATH": str(vibe.parent) + os.pathsep + os.defpath,
+        "HOME": str(home), "USERPROFILE": str(home), "VIBE_HOME": str(native_home),
+        "MISTRAL_API_KEY": "fake-key", "TERM": "xterm-256color", "LANG": "C.UTF-8",
+        "VIBE_TEST_DISABLE_KEYRING": "1", "VIBE_TEST_DISABLE_AUTO_TITLE": "1",
+        "VIBE_TEST_DISABLE_MODEL_PROBE": "1", "VIBE_INPUT_GRACE_PERIOD_MS": "50",
+        "VIBE_TYPING_GRACE_PERIOD_MS": "50", "OTEL_SDK_DISABLED": "true",
+        "HTTP_PROXY": "http://127.0.0.1:9", "HTTPS_PROXY": "http://127.0.0.1:9",
+        "ALL_PROXY": "http://127.0.0.1:9", "NO_PROXY": "127.0.0.1,localhost",
+        "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull,
+    }
+
+
+def run(arguments):
+    require(os.name == "posix", "This native qualification uses a POSIX pseudo-terminal")
+    root = arguments.output_directory.resolve()
+    root.mkdir(parents=True, exist_ok=False)
+    home = root / "home"
+    native_home = home / ".vibe"
+    workspace = root / "workspace"
+    profile = root / "profile"
+    deliveries = root / "deliveries"
+    for path in (home, workspace, profile, deliveries):
+        path.mkdir()
+    vibe = arguments.vibe.absolute()
+    package = arguments.package.resolve()
+    source = arguments.vibe_source.resolve()
+    require(vibe.is_file(), f"Installed Vibe executable is missing: {vibe}")
+    require((source / "tests/e2e/mock_server.py").is_file(), "Vibe source test fixtures are missing")
+
+    # Only the test driver imports upstream fixtures. Native Vibe runs in the
+    # empty test workspace without PYTHONPATH, using its installed distribution.
+    sys.path.insert(0, str(source))
+    from tests.e2e.mock_server import StreamingMockServer
+    from tests.e2e.common import (
+        TERMINAL_COLUMNS, TERMINAL_ROWS, send_ctrl_c_until_quit_confirmation,
+        wait_for_main_screen, wait_for_rendered_text, write_e2e_config,
+    )
+    from tests.e2e.agent_loop_characterization.test_subagents import (
+        PARENT_PROMPT, SUBAGENT_NAME, SUBAGENT_ANSWER,
+        _is_parent_request, _spawn_subagent_factory, assistant_text_chunks,
+    )
+    sys.path.remove(str(source))
+    import pexpect
+
+    spec = importlib.util.spec_from_file_location(
+        "vibe_protocol_harness", Path(__file__).with_name("vibe_protocol_tests.py"))
+    require(spec is not None and spec.loader is not None, "Adapter protocol harness is unavailable")
+    harness = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(harness)
+    environment = isolated_environment(home, native_home, vibe)
+    os.environ.clear()
+    os.environ.update(environment)
+    snapshots = {}
+    root_session = None
+
+    def respond(index, payload):
+        nonlocal root_session
+        if root_session is None:
+            starts = [json.loads(path.read_text("utf-8"))["event"] for path in deliveries.glob("*.json")]
+            starts = [event for event in starts if event["name"] == "session_start"]
+            require(len(starts) == 1, "Native session_start did not reach the packaged helper")
+            root_session = Path(starts[0]["body"]["transcript_path"])
+        messages = payload.get("messages") or []
+        if any(message.get("role") == "user" and message.get("content") == RESUME_PROMPT
+               for message in messages):
+            return assistant_text_chunks(RESUME_ANSWER, created=130)
+        label = "child-running" if not _is_parent_request(payload) else "child-settled"
+        if (label == "child-running" or index > 0) and label not in snapshots:
+            snapshots[label] = capture_generation(root_session, root / "snapshots" / label)
+        return _spawn_subagent_factory(index, payload)
+
+    server = StreamingMockServer(chunk_factory=respond)
+    server.start()
+    adapter = None
+    child = None
+    captured = io.StringIO()
+    try:
+        write_e2e_config(native_home, server.api_base, settings=["enable_subagents = true"])
+        adapter = harness.Adapter(package, root)
+        launcher_argv = [str(vibe), "--auto-approve", "--trust"]
+        preparation = {
+            "launcher": {
+                "script_body": " ".join('"' + word.replace('"', '"""') + '"' for word in launcher_argv),
+                "runner_key": "direct", "environment_text": "",
+            },
+            "launcher_argv": launcher_argv,
+            "launch_environment": {"platform": harness.PLATFORM, "effective_environment": environment},
+            "working_directory": str(workspace), "title_instruction": "Native Vibe qualification",
+            "declared_assets": [], "profile_storage": {"version": 1, "root": str(profile)},
+        }
+        patch = success(adapter, "launch-preparation", 3, "prepare", preparation)
+        require(patch["disposition"]["lifecycle_events"], patch)
+        require(patch["apply_managed_configuration"], patch)
+        transformed = success(adapter, "managed-configuration", 1, "transform", {
+            "grant": "4" * 32, "present": False, "content_base64": "",
+        })
+        (native_home / "hooks.toml").write_bytes(base64.b64decode(transformed["content_base64"], validate=True))
+        host = root / "test_vnmctl"
+        create_host_fixture(host, deliveries)
+        launch_environment = dict(environment)
+        launch_environment.update(patch["environment"]["set"])
+        launch_environment.update({
+            "LOGONOMIC_VNMCTL_PATH": str(host), "LOGONOMIC_SESSION_CAPABILITY": "1" * 64,
+            "LOGONOMIC_PROVIDER_PACKAGE_ID": "logonomic.cli.vibe",
+            "LOGONOMIC_PROVIDER_GENERATION_DIGEST": adapter.digest,
+            "LOGONOMIC_PROVIDER_GENERATION_NONCE": adapter.nonce,
+            "LOGONOMIC_PROVIDER_HELPERS_DIR": str(package / "helpers"),
+        })
+        result = subprocess.run(
+            [str(vibe), "-p", PARENT_PROMPT, "--auto-approve", "--max-turns", "6",
+             "--trust", "--output", "json", "--output-dir", str(root / "export")],
+            cwd=workspace, env=launch_environment, capture_output=True, text=True, timeout=60,
+        )
+        (root / "headless.stdout").write_text(result.stdout, encoding="utf-8")
+        (root / "headless.stderr").write_text(result.stderr, encoding="utf-8")
+        require(result.returncode == 0, f"Native headless turn exited {result.returncode}: {result.stderr}")
+        require("child-running" in snapshots and "child-settled" in snapshots,
+                "Native parent/child requests did not publish both observation points")
+        running = runtime_state(snapshots["child-running"])["subagents"]["children"][SUBAGENT_NAME]
+        settled = runtime_state(snapshots["child-settled"])["subagents"]["children"][SUBAGENT_NAME]
+        require(running["state"]["type"] == "running", running)
+        require(settled["state"]["type"] == "idle", settled)
+        outcome = settled["state"]["last_outcome"]
+        require(outcome["type"] == "completed" and outcome["final_answer"] == SUBAGENT_ANSWER, outcome)
+        require(running["state"]["active"]["turn_id"] == outcome["turn_id"], "Child turn correlation changed")
+
+        events = [json.loads(path.read_text("utf-8")) for path in sorted(deliveries.glob("*.json"))]
+        starts = [value for value in events if value["event"]["name"] == "session_start"]
+        require(len(starts) == 1, f"Expected one helper-delivered root start: {starts}")
+        for delivery in events:
+            require((deliveries / (delivery["idempotency_key"] + ".ack")).is_file(),
+                    f"Delivery was not acknowledged: {delivery['event']['name']}")
+        classification = success(adapter, "helper-ingress", 2, "classify_event", {
+            "event": starts[0]["event"],
+            "ledger": {"current_epoch": 0, "current_transition": None},
+            "transition_nonce": "2" * 32,
+        })
+        record = next(observation["resume_record"] for observation in classification["observations"]
+                      if "resume_record" in observation)
+        session = Path(record["transcript_path"])
+        before_inspection = file_hashes(native_home)
+        resume_request = dict(preparation, resume={"version": 1, "record": record})
+        inspection_request = {key: value for key, value in resume_request.items() if key != "title_instruction"}
+        inspected = success(adapter, "interactive-resume", 3, "inspect_resume", inspection_request)
+        require(inspected["availability"] == "available", inspected)
+        prepared = success(adapter, "interactive-resume", 2, "prepare_resume", resume_request)
+        require(prepared["process"]["argv"][-2:] == ["--resume", record["provider_session_id"]], prepared)
+        require(file_hashes(native_home) == before_inspection, "Resume preflight modified native data")
+        write_json(root / "resume-inspection.json", inspected)
+        write_json(root / "resume-preparation.json", prepared)
+
+        resume_environment = dict(launch_environment)
+        resume_environment.update(prepared["environment"]["set"])
+        process = prepared["process"]
+        child = pexpect.spawn(
+            str(package / process["executable"]), process["argv"], cwd=str(workspace),
+            env=resume_environment, encoding="utf-8", timeout=30,
+            dimensions=(TERMINAL_ROWS, TERMINAL_COLUMNS),
+        )
+        child.logfile_read = captured
+        wait_for_main_screen(child, timeout=20)
+        child.send(RESUME_PROMPT + "\r")
+        wait_for_rendered_text(child, captured, needle=RESUME_ANSWER, timeout=20)
+        send_ctrl_c_until_quit_confirmation(child, captured, timeout=5)
+        child.expect(pexpect.EOF, timeout=10)
+        child.close()
+        require(child.exitstatus == 0, f"Interactive bridge exited {child.exitstatus}/{child.signalstatus}")
+        latest = server.requests[-1]
+        require(any(message.get("role") == "user" and PARENT_PROMPT in str(message.get("content"))
+                    for message in latest["messages"]), "Native resume lost the earlier parent prompt")
+        resumed = [json.loads(path.read_text("utf-8"))["event"] for path in deliveries.glob("*.json")]
+        require(any(event["name"] == "session_start" and event["body"].get("source") == "resume"
+                    and event["body"]["session_id"] == record["provider_session_id"] for event in resumed),
+                "The package did not receive the exact resumed session identity")
+        require(all(value == "Bearer fake-key" for value in server.authorizations),
+                "A scripted model request did not use the test-owned dummy key")
+        snapshots["resumed"] = capture_generation(session, root / "snapshots" / "resumed")
+        version = subprocess.run([str(vibe), "--version"], env=environment, cwd=workspace,
+                                 capture_output=True, text=True, timeout=10)
+        summary = {
+            "native_version": version.stdout.strip(), "model": latest["model"],
+            "root_session_id": record["provider_session_id"], "child_name": SUBAGENT_NAME,
+            "child_turn_id": outcome["turn_id"], "child_states": ["running", "idle"],
+            "model_requests": len(server.requests), "resume_availability": inspected["availability"],
+            "interactive_exact_resume": True, "native_store": str(session),
+        }
+        write_json(root / "result.json", summary)
+        print(json.dumps(summary, indent=2))
+    finally:
+        if child is not None and child.isalive():
+            child.terminate(force=True)
+        if child is not None and not child.closed:
+            child.close()
+        (root / "interactive.txt").write_text(captured.getvalue(), encoding="utf-8")
+        write_json(root / "requests.json", server.requests)
+        server.stop()
+        if adapter is not None:
+            adapter.close()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--vibe", type=Path, required=True)
+    parser.add_argument("--vibe-source", type=Path, required=True)
+    parser.add_argument("--package", type=Path, required=True)
+    parser.add_argument("--output-directory", type=Path, required=True)
+    arguments = parser.parse_args()
+    try:
+        run(arguments)
+    except Exception as error:
+        print(f"Native Vibe qualification failed: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
