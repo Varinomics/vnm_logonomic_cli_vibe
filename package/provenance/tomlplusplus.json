@@ -1,0 +1,10 @@
+{
+  "name": "toml++",
+  "source": "https://github.com/marzer/tomlplusplus",
+  "source_ref": "master or VIBE_TOMLPLUSPLUS_SOURCE",
+  "incorporation": "Header-only parser compiled into the native adapter",
+  "purpose": "Validate Vibe hooks.toml and edit owned source regions without rewriting user configuration",
+  "license": "MIT",
+  "notice": "notices/tomlplusplus-LICENSE.txt",
+  "notice_validation": "CMake requires the packaged notice to exactly match the selected source LICENSE"
+}

@@ -1,0 +1,9 @@
+{
+  "capability_id": "managed-configuration",
+  "version": 1,
+  "payload": {
+    "environment_name": "VIBE_HOME",
+    "relative_path": "hooks.toml",
+    "default_home_relative_path": ".vibe"
+  }
+}

@@ -25,6 +25,12 @@ int main()
     require(!interactive_invocation({"vibe", "--agent"}), "missing option value");
     require(!interactive_invocation({"vibe", "--worktree"}), "workspace-changing launch");
     require(!interactive_invocation({"vibe", "--unknown"}), "unknown launch semantics");
+    require(vibe::supported_version("3.1.1"), "first native-hook release");
+    require(vibe::supported_version("3.1.2"), "observed current release");
+    require(vibe::supported_version("4.0.0"), "future releases are not artificially capped");
+    require(!vibe::supported_version("3.1.0"), "older hooks are insufficient");
+    require(!vibe::supported_version("3.1.1-rc.1"), "minimum prerelease precedes hook release");
+    require(!vibe::supported_version("not a version"), "unverified version");
     require(!vibe::resolve_home({{"VIBE_HOME", "~/.vibe"}}, "/repo"), "tilde selector must not target another config");
     require(!vibe::resolve_home({{"VIBE_HOME", " relative "}}, "/repo"), "selector trimming mismatch");
     require(!vibe::resolve_home({}, "/repo"), "missing platform home");

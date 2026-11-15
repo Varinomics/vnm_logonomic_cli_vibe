@@ -1,0 +1,18 @@
+name: Provider CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  provider:
+    uses: Varinomics/logonomic/.github/workflows/cli-addon-provider.yml@master
+    with:
+      provider: vibe
+    secrets:
+      VARINOMICS_REPO_READ_TOKEN: ${{ secrets.VARINOMICS_REPO_READ_TOKEN }}

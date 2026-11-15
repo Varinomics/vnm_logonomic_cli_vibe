@@ -12,8 +12,14 @@
 namespace vibe {
 
 bool interactive_invocation(const std::vector<std::string>& argv);
+bool supported_version(std::string_view version);
 std::optional<std::filesystem::path> resolve_home(
     const logonomic::cli_addon::Environment& environment, std::string_view working_directory);
+std::optional<std::filesystem::path> verified_program(
+    const std::vector<std::string>& argv,
+    const logonomic::cli_addon::Environment& environment, std::string_view working_directory,
+    logonomic::cli_addon::Invocation_context& context);
+std::optional<std::string> hook_executable();
 void handle_launcher(logonomic::cli_addon::Invocation_context& context);
 
 } // namespace vibe

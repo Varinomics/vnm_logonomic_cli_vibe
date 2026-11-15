@@ -3,6 +3,7 @@
 #include <logonomic_cli_addon/launch_preparation.h>
 #include <logonomic_cli_addon/launcher_discovery.h>
 #include <logonomic_cli_addon/package_source.h>
+#include <logonomic_cli_addon/host_simulator.h>
 
 #include <array>
 #include <system_error>
@@ -15,7 +16,7 @@ bool interactive_invocation(const std::vector<std::string>& argv)
 {
     if (argv.empty()) return false;
     const auto name = addon::lower(addon::base_name(argv.front()));
-    if (name != "vibe" && name != "vibe.exe" && name != "vibe.cmd" && name != "vibe.bat") return false;
+    if (name != "vibe" && name != "vibe.exe") return false;
     bool prompt = false;
     for (std::size_t index = 1; index < argv.size(); ++index) {
         const auto& arg = argv[index];
@@ -46,6 +47,22 @@ bool interactive_invocation(const std::vector<std::string>& argv)
     return true;
 }
 
+bool supported_version(std::string_view version)
+{
+    if (!addon::is_semantic_version(version)) return false;
+    const auto suffix = version.find_first_of("-+");
+    auto components = version.substr(0, suffix);
+    for (const std::string_view minimum : {"3", "1", "1"}) {
+        const auto dot = components.find('.');
+        const auto component = components.substr(0, dot);
+        if (component.size() != minimum.size()) return component.size() > minimum.size();
+        if (component != minimum) return component > minimum;
+        components = dot == std::string_view::npos ? std::string_view{} : components.substr(dot + 1);
+    }
+    // A prerelease of 3.1.1 precedes the release which introduced the hooks.
+    return suffix == std::string_view::npos || version[suffix] == '+';
+}
+
 std::optional<fs::path> resolve_home(const addon::Environment& environment, std::string_view working_directory)
 {
     auto selected = addon::environment_value(environment, "VIBE_HOME");
@@ -68,6 +85,41 @@ std::optional<fs::path> resolve_home(const addon::Environment& environment, std:
     const auto canonical = fs::weakly_canonical(path, error);
     if (error || !canonical.is_absolute()) return std::nullopt;
     return canonical;
+}
+
+std::optional<fs::path> verified_program(const std::vector<std::string>& argv,
+    const addon::Environment& environment, std::string_view working_directory, addon::Invocation_context& context)
+{
+    if (!interactive_invocation(argv) || context.cancel_requested()) return std::nullopt;
+    const auto program = addon::resolve_program(argv.front(), environment, working_directory);
+    if (!program) return std::nullopt;
+#ifdef _WIN32
+    if (!addon::native_image(*program)) return std::nullopt;
+#endif
+    const auto output = addon::probe({addon::path_to_utf8(*program), "--version"},
+        environment, working_directory, 5000, context);
+    if (!output) return std::nullopt;
+    constexpr std::string_view labels[] = {"vibe", "mistral-vibe", "mistral vibe"};
+    const auto stdout_version = addon::parse_version_stream(output->output, labels);
+    const auto stderr_version = addon::parse_version_stream(output->errors, labels);
+    if (!stdout_version || !stderr_version ||
+        (!stdout_version->empty() && !stderr_version->empty() && *stdout_version != *stderr_version)) return std::nullopt;
+    const auto& version = stdout_version->empty() ? *stderr_version : *stdout_version;
+    return supported_version(version) ? program : std::nullopt;
+}
+
+std::optional<std::string> hook_executable()
+{
+    const auto root = addon::environment_value(addon::current_process_environment(), addon::k_env_package_root);
+    if (root.empty() || !addon::path_from_utf8(root).is_absolute()) return std::nullopt;
+#ifdef _WIN32
+    constexpr const char* helper = "logonomic_vibe_hook.exe";
+#else
+    constexpr const char* helper = "logonomic_vibe_hook";
+#endif
+    const auto path = addon::path_from_utf8(root) / "helpers" / helper;
+    if (!addon::regular_file(path)) return std::nullopt;
+    return addon::path_to_utf8(path);
 }
 
 namespace {
@@ -102,6 +154,12 @@ void discover(addon::Invocation_context& context)
     }
     std::vector<addon::Launcher_candidate> candidates;
     if (program) {
+#ifdef _WIN32
+        if (!addon::native_image(*program)) {
+            context.succeed(addon::encode_candidates(candidates));
+            return;
+        }
+#endif
         addon::Launcher_candidate candidate;
         candidate.candidate_id = "vibe_interactive";
         candidate.display_name = "Mistral Vibe";
@@ -136,8 +194,37 @@ void prepare(addon::Invocation_context& context)
     patch.account_context = request->account_context;
     const auto invocation = addon::literal_launcher_invocation(request->launcher,
         request->launch_environment->platform_id, request->launcher_argv);
-    patch.disposition = addon::Launch_disposition{
-        invocation && interactive_invocation(invocation->argv), false, false};
+    patch.disposition = addon::Launch_disposition{false, false, false};
+    if (!invocation || !interactive_invocation(invocation->argv)) {
+        context.succeed(addon::encode_launch_patch(patch, 3));
+        return;
+    }
+    const auto environment = addon::environment_pairs(request->launch_environment->effective_environment);
+    // Workspace-changing invocations need an execution-context contract. Leave
+    // those ordinary launches untouched instead of binding the wrong repository.
+    if (!addon::environment_value(environment, "VIBE_CWD").empty()) {
+        context.succeed(addon::encode_launch_patch(patch, 3));
+        return;
+    }
+    const auto home = resolve_home(environment, request->working_directory);
+    if (!home) {
+        context.fail(addon::Result_status::UNAVAILABLE, "vibe_home_unavailable");
+        return;
+    }
+    if (!verified_program(invocation->argv, environment, request->working_directory, context)) {
+        context.fail(context.cancel_requested() ? addon::Result_status::CANCELLED : addon::Result_status::UNAVAILABLE,
+            context.cancel_requested() ? "cancelled" : "vibe_hooks_version_unavailable",
+            "Mistral Vibe 3.1.1 or newer is required for native lifecycle hooks.");
+        return;
+    }
+    const auto helper = hook_executable();
+    if (!helper) {
+        context.fail(addon::Result_status::UNAVAILABLE, "vibe_hook_unavailable");
+        return;
+    }
+    patch.disposition = addon::Launch_disposition{true, true, false};
+    patch.apply_managed_configuration = true;
+    patch.set = {{"VNM_VIBE_HOOK", *helper}, {"VIBE_HOME", addon::path_to_utf8(*home)}};
     context.succeed(addon::encode_launch_patch(patch, 3));
 }
 

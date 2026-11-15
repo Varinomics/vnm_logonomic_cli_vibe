@@ -1,0 +1,19 @@
+{
+  "capability_id": "lifecycle-events",
+  "version": 2,
+  "payload": {
+    "profile_id": "mistral-vibe-hooks",
+    "features": {
+      "root_turn_start": "supported",
+      "root_turn_completion": "supported",
+      "confirmed_phase_status": "supported",
+      "attention": "supported",
+      "paired_attention": "unsupported",
+      "subagents": "unsupported",
+      "cooperative_description": "unsupported",
+      "blockable_completion": "unsupported"
+    },
+    "turn_origin_correlation": "unsupported",
+    "observation": "events"
+  }
+}
