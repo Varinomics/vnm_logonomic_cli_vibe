@@ -1,0 +1,9 @@
+{
+  "capability_id": "presentation",
+  "version": 1,
+  "payload": {
+    "display_name": "Mistral Vibe",
+    "icon": {"light": "assets/vibe.svg", "dark": "assets/vibe.svg"},
+    "accent": {"light": "#E66228", "dark": "#FF9D45"}
+  }
+}

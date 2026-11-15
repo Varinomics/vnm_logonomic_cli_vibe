@@ -1,0 +1,12 @@
+{
+  "repository": "https://github.com/mistralai/mistral-vibe",
+  "observed_version": "3.1.2",
+  "observed_commit": "b20313e01d6926d4191da89c32d5da11e3a0a060",
+  "minimum_hook_version": "3.1.1",
+  "sources": [
+    "vibe/cli-rust/src/cli.rs",
+    "vibe/core/hooks/models.py",
+    "vibe/app_server/_host_hooks.py",
+    "vibe/plugins/builtins/vibe/skills/vibe/SKILL.md"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "bootstrap_version": 1,
+  "package_id": "logonomic.cli.vibe",
+  "release_version": "@PROJECT_VERSION@",
+  "platforms": ["@VIBE_PLATFORM@"],
+  "adapter": {
+    "path": {"@VIBE_PLATFORM@": "adapter/vibe_adapter@VIBE_EXECUTABLE_SUFFIX@"},
+    "argv": [],
+    "environment": {}
+  },
+  "core_protocol_generations": [1],
+  "integrity_index": "package.files.json"
+}

@@ -1,0 +1,5 @@
+{
+  "capability_id": "launcher-discovery",
+  "version": 1,
+  "payload": {"environment_names": ["VIBE_HOME", "VIBE_CWD"]}
+}
