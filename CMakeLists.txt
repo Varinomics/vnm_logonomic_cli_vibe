@@ -6,6 +6,11 @@ if(POLICY CMP0168)
 endif()
 
 project(logonomic_cli_vibe VERSION 0.1.0 LANGUAGES CXX)
+# Standalone packages carry executables without a separate MSVC runtime.
+# Set this before SDK creation so all linked objects use the same CRT.
+if(MSVC AND NOT LOGONOMIC_CLI_ADDON_EMBEDDED)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)

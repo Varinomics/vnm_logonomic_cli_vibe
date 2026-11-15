@@ -244,20 +244,38 @@ class ProtocolTests(unittest.TestCase):
             "transcript_path": str(native_home / "logs" / "session" / "unified" / session),
         }
 
-    def resume_fixture(self):
+    def resume_fixture(self, save_directory=None):
         executable, environment = self.installed_cli()
         session_id = "bc838a1c-14ec-4f08-8c0c-290d7f922c15"
-        record = self.event("session_start", self.native_start(session_id))["observations"][0]["resume_record"]
+        started = self.native_start(session_id)
+        if save_directory is not None:
+            started["transcript_path"] = str(save_directory / "unified" / session_id)
+        record = self.event("session_start", started)["observations"][0]["resume_record"]
         transcript = Path(record["transcript_path"])
         generation = "0000000000000001"
         generation_directory = transcript / "generations" / generation
         generation_directory.mkdir(parents=True)
         # These are native store identity witnesses, not a simulated transcript
         # or a claim that the adapter can replay Vibe's private journal.
-        (transcript / "meta.json").write_text(json.dumps({"session_id": session_id}), encoding="utf-8")
+        (transcript / "meta.json").write_text(json.dumps({
+            "session_id": session_id,
+            "environment": {"working_directory": str(self.workspace)},
+        }), encoding="utf-8")
+        descriptors = {}
+        for key, filename in (("checkpoint", "checkpoint.json"),
+                              ("runtime_state", "runtime-state.json"),
+                              ("projection_state", "projection-state.json")):
+            (generation_directory / filename).write_bytes(b"{}\n")
+            descriptors[key] = {"path": filename, "sha256": hashlib.sha256(b"{}").hexdigest()}
+        descriptors["checkpoint"]["checkpoint_version"] = 1
+        (transcript / "journal").mkdir()
+        (transcript / "journal" / "0000000000000001.jsonl").write_bytes(b"")
         manifest = json.dumps({
             "manifest_version": 1, "session_id": session_id,
             "generation": generation, "snapshot_sequence": 0,
+            "created_at": "2026-01-01T00:00:00Z", "execution_state": "quiescent",
+            **descriptors,
+            "recovery_journal_segment": {"path": "journal/0000000000000001.jsonl", "first_sequence": 1},
         }).encode("utf-8")
         (generation_directory / "manifest.json").write_bytes(manifest + b"\n")
         (transcript / "CURRENT").write_text(json.dumps({
@@ -365,6 +383,37 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(result["status"], "unavailable", result)
         self.assertFalse((executable.parent / "unexpected-launch.txt").exists())
 
+    def test_initial_native_resume_selectors_remain_unmanaged(self):
+        executable, environment = self.installed_cli()
+        (self.native_home / "hooks.toml").write_text("# Native hooks stay unchanged.\n", encoding="utf-8")
+        original = self.snapshot(self.native_home)
+        request = self.preparation_request(executable, environment)
+        for options in (["--resume"], ["--resume", "native-session"],
+                        ["--resume=native-session"], ["--continue"], ["-c"]):
+            with self.subTest(options=options):
+                arguments = [str(executable), "--agent", "plan", *options]
+                script = " ".join(f'"{argument}"' for argument in arguments)
+                request["launcher"]["script_body"] = script
+                request["launcher_argv"] = arguments
+                self.assertTrue(self.recognize(script)["recognized"])
+                result = self.success("launch-preparation", 3, "prepare", request)
+                self.assertEqual(result["disposition"], {
+                    "version": 1, "prepared": False, "lifecycle_events": False, "coordination_delivery": False,
+                })
+                self.assertEqual(result["environment"], {"set": {}, "unset": []})
+                self.assertFalse(result.get("apply_managed_configuration", False))
+                self.assertNotIn("argv", result)
+                self.assertEqual(self.snapshot(self.native_home), original)
+        # A positional prompt after -- is not a native saved-session selector.
+        request["launcher_argv"] = [str(executable), "--", "--resume"]
+        request["launcher"]["script_body"] = f'"{executable}" -- --resume'
+        result = self.success("launch-preparation", 3, "prepare", request)
+        self.assertTrue(result["disposition"]["prepared"])
+        self.assertTrue(result["disposition"]["lifecycle_events"])
+        self.assertTrue(result["apply_managed_configuration"])
+        self.assertEqual(self.snapshot(self.native_home), original)
+        self.assertFalse((executable.parent / "unexpected-launch.txt").exists())
+
     def test_managed_hooks_preserve_user_content_and_are_idempotent(self):
         original = '# My hooks stay intact.\n[[hooks]]\nname = "custom"\ntype = "pre_agent"\ncommand = "echo local"\n'
         grant = "3" * 32
@@ -460,6 +509,135 @@ class ProtocolTests(unittest.TestCase):
                 self.assertEqual(result["profile_storage"], request["profile_storage"])
                 self.assertEqual(result["environment"]["set"]["VIBE_HOME"], record["vibe_home"])
         self.assertEqual(self.snapshot(self.native_home), original)
+        self.assertFalse((executable.parent / "unexpected-launch.txt").exists())
+
+    def test_resume_restores_the_recorded_store_and_enables_session_logging(self):
+        recorded_store = self.root / "original native session store"
+        executable, request, record = self.resume_fixture(recorded_store)
+        replacement_store = self.root / "replacement native session store"
+        replacement_store.mkdir()
+        request["launch_environment"]["effective_environment"].update({
+            "VIBE_SESSION_LOGGING__SAVE_DIR": str(replacement_store),
+            "VIBE_SESSION_LOGGING__ENABLED": "false",
+        })
+        (self.native_home / "config.toml").write_text("[session_logging]\nenabled = false\n", encoding="utf-8")
+        original_home = self.snapshot(self.native_home)
+        original_store = self.snapshot(recorded_store)
+        self.assertEqual(self.inspect_resume(request)["availability"], "available")
+        result = self.success("interactive-resume", 2, "prepare_resume", request)
+        environment = result["environment"]["set"]
+        self.assertEqual(environment["VIBE_SESSION_LOGGING__SAVE_DIR"], str(recorded_store))
+        self.assertEqual(environment["VIBE_SESSION_LOGGING__ENABLED"], "true")
+        self.assertEqual(environment["VIBE_HOME"], record["vibe_home"])
+        self.assertEqual(result["process"]["argv"][-2:], ["--resume", record["provider_session_id"]])
+        self.assertEqual(self.snapshot(self.native_home), original_home)
+        self.assertEqual(self.snapshot(recorded_store), original_store)
+        self.assertEqual(self.snapshot(replacement_store), {})
+        self.assertFalse((executable.parent / "unexpected-launch.txt").exists())
+
+    def test_resume_rejects_malformed_transcript_layout(self):
+        executable, request, record = self.resume_fixture()
+        transcript = Path(record["transcript_path"])
+        original = self.snapshot(self.native_home)
+        for path in (transcript.with_name("different-session"),
+                     transcript.parent.parent / record["provider_session_id"]):
+            with self.subTest(transcript=path):
+                request["resume"]["record"] = {**record, "transcript_path": str(path)}
+                self.assertEqual(self.inspect_resume(request)["availability"], "unknown")
+                result = self.adapter.invoke("interactive-resume", 2, "prepare_resume", request)
+                self.assertEqual(result["status"], "error", result)
+                self.assertEqual(result["reason"], "resume_record_invalid", result)
+                self.assertNotIn("payload", result)
+                self.assertEqual(self.snapshot(self.native_home), original)
+        self.assertFalse((executable.parent / "unexpected-launch.txt").exists())
+
+    def test_resume_refuses_changed_or_missing_working_directory(self):
+        executable, request, record = self.resume_fixture()
+        metadata_path = Path(record["transcript_path"]) / "meta.json"
+        metadata = json.loads(metadata_path.read_text("utf-8"))
+        another_directory = self.root / "different workspace"
+        another_directory.mkdir()
+
+        def refused():
+            original = self.snapshot(self.native_home)
+            self.assertEqual(self.inspect_resume(request)["availability"], "unknown")
+            result = self.adapter.invoke("interactive-resume", 2, "prepare_resume", request)
+            self.assertEqual(result["status"], "unavailable", result)
+            self.assertEqual(result["reason"], "vibe_resume_directory_mismatch", result)
+            self.assertNotIn("payload", result)
+            self.assertEqual(self.snapshot(self.native_home), original)
+
+        with self.subTest(directory="different launch workspace"):
+            request["working_directory"] = str(another_directory)
+            refused()
+        request["working_directory"] = str(self.workspace)
+        for replacement in ({"session_id": record["provider_session_id"]},
+                            {"session_id": record["provider_session_id"], "environment": {}},
+                            {"session_id": record["provider_session_id"],
+                             "environment": {"working_directory": "relative/workspace"}}):
+            with self.subTest(metadata=replacement):
+                metadata_path.write_text(json.dumps(replacement), encoding="utf-8")
+                refused()
+        with self.subTest(directory="deleted native workspace"):
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+            self.workspace.rmdir()
+            refused()
+        self.assertEqual(self.snapshot(another_directory), {})
+        self.assertFalse((executable.parent / "unexpected-launch.txt").exists())
+
+    def test_resume_missing_runtime_files_stays_unknown(self):
+        executable, request, record = self.resume_fixture()
+        transcript = Path(record["transcript_path"])
+        generation = transcript / "generations" / "0000000000000001"
+        required = [generation / "checkpoint.json", generation / "runtime-state.json",
+                    generation / "projection-state.json", transcript / "journal" / "0000000000000001.jsonl"]
+        for path in required:
+            with self.subTest(missing=path.name):
+                content = path.read_bytes()
+                path.unlink()
+                try:
+                    original = self.snapshot(self.native_home)
+                    self.assertEqual(self.inspect_resume(request)["availability"], "unknown")
+                    result = self.adapter.invoke("interactive-resume", 2, "prepare_resume", request)
+                    self.assertEqual(result["status"], "unavailable", result)
+                    self.assertEqual(result["reason"], "vibe_native_session_unavailable", result)
+                    self.assertNotIn("payload", result)
+                    self.assertEqual(self.snapshot(self.native_home), original)
+                finally:
+                    path.write_bytes(content)
+        self.assertFalse((executable.parent / "unexpected-launch.txt").exists())
+
+    def test_resume_rejects_malformed_runtime_descriptors(self):
+        executable, request, record = self.resume_fixture()
+        transcript = Path(record["transcript_path"])
+        current_path = transcript / "CURRENT"
+        pointer = json.loads(current_path.read_text("utf-8"))
+        manifest_path = transcript / "generations" / pointer["generation"] / "manifest.json"
+        manifest = json.loads(manifest_path.read_text("utf-8"))
+        for key, replacement in (
+            ("checkpoint", None),
+            ("runtime_state", {"path": "../runtime-state.json"}),
+            ("projection_state", {"path": "nested/projection-state.json"}),
+            ("recovery_journal_segment", {"path": "journal/../0000000000000001.jsonl", "first_sequence": 1}),
+            ("recovery_journal_segment", {"path": "journal/0000000000000001.jsonl", "first_sequence": 2}),
+        ):
+            with self.subTest(descriptor=key, replacement=replacement):
+                changed = {**manifest, key: replacement}
+                if replacement is None:
+                    del changed[key]
+                body = json.dumps(changed).encode("utf-8")
+                manifest_path.write_bytes(body + b"\n")
+                # Keep the outer identity witness valid to exercise descriptor
+                # rejection independently of the manifest checksum gate.
+                pointer["manifest_sha256"] = hashlib.sha256(body).hexdigest()
+                current_path.write_text(json.dumps(pointer), encoding="utf-8")
+                original = self.snapshot(self.native_home)
+                self.assertEqual(self.inspect_resume(request)["availability"], "unknown")
+                result = self.adapter.invoke("interactive-resume", 2, "prepare_resume", request)
+                self.assertEqual(result["status"], "unavailable", result)
+                self.assertEqual(result["reason"], "vibe_native_session_unavailable", result)
+                self.assertNotIn("payload", result)
+                self.assertEqual(self.snapshot(self.native_home), original)
         self.assertFalse((executable.parent / "unexpected-launch.txt").exists())
 
     def test_missing_or_changed_native_store_does_not_launch_a_fresh_session(self):

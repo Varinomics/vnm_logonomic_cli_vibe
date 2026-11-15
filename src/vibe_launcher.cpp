@@ -124,6 +124,23 @@ std::optional<std::string> hook_executable()
 
 namespace {
 
+bool selects_saved_session(const std::vector<std::string>& argv)
+{
+    // Called only after interactive_invocation has validated the option shape.
+    for (std::size_t index = 1; index < argv.size(); ++index) {
+        const auto& arg = argv[index];
+        if (arg == "--") return false;
+        if (arg == "--agent" || arg == "--add-dir") {
+            ++index;
+        }
+        else if (arg == "--resume" || arg.starts_with("--resume=") ||
+            arg == "--continue" || arg == "-c") {
+            return true;
+        }
+    }
+    return false;
+}
+
 void reject(addon::Invocation_context& context, const addon::Contract_failure& error)
 {
     context.fail(addon::Result_status::FAILED, error.reason_code, error.detail);
@@ -200,9 +217,11 @@ void prepare(addon::Invocation_context& context)
         return;
     }
     const auto environment = addon::environment_pairs(request->launch_environment->effective_environment);
-    // Workspace-changing invocations need an execution-context contract. Leave
-    // those ordinary launches untouched instead of binding the wrong repository.
-    if (!addon::environment_value(environment, "VIBE_CWD").empty()) {
+    // Native startup resume can restore another cwd and configuration context.
+    // Leave it and explicit cwd overrides unmanaged; exact host resume is
+    // verified separately against its saved record and selected directory.
+    if (selects_saved_session(invocation->argv) ||
+        !addon::environment_value(environment, "VIBE_CWD").empty()) {
         context.succeed(addon::encode_launch_patch(patch, 3));
         return;
     }
