@@ -1,12 +1,14 @@
 // Native process fixture for version probes and the helper's vnmctl delivery.
 // It never launches an interactive CLI or performs a model/network request.
 #include <cstdlib>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
 #include <string>
 #include <string_view>
+#include <thread>
 
 int main(int argc, char** argv)
 {
@@ -30,8 +32,11 @@ int main(int argc, char** argv)
             const std::string input((std::istreambuf_iterator<char>(std::cin)), {});
             std::ofstream output(capture, std::ios::binary);
             output << input;
+            output.close();
             if (!output) return 3;
             if (std::getenv("VIBE_TEST_WRAPPER_FAIL")) return 1;
+            if (std::getenv("VIBE_TEST_WRAPPER_STALL"))
+                std::this_thread::sleep_for(std::chrono::seconds(8));
             std::cout << "{\"accepted\":true,\"epoch\":1}\n";
             return 0;
         }

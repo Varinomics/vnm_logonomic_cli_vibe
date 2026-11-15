@@ -9,7 +9,7 @@ import sys
 import tempfile
 
 
-def run_hook(executable, payload, environment, *arguments):
+def run_hook(executable, payload, environment, *arguments, timeout=15):
     data = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
     result = subprocess.run(
         [str(executable), *arguments],
@@ -17,7 +17,7 @@ def run_hook(executable, payload, environment, *arguments):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env=environment,
-        timeout=15,
+        timeout=timeout,
         check=False,
     )
     assert result.returncode == 0, result.returncode
@@ -92,6 +92,14 @@ def main():
         run_hook(executable, payload, dict(environment, VIBE_TEST_WRAPPER_FAIL="1"))
         assert captured.is_file()
         assert not acknowledged.exists()
+
+        # Vibe's outer five-second hook deadline must not kill the helper while
+        # it is waiting for the host. The fixture would return only after eight
+        # seconds; the helper must cancel its SDK wrapper and exit quietly first.
+        captured.unlink()
+        run_hook(executable, payload, dict(environment, VIBE_TEST_WRAPPER_STALL="1"), timeout=5)
+        assert captured.is_file(), "fixture did not exercise an in-flight host call"
+        assert not acknowledged.exists(), "cancelled delivery was acknowledged"
 
     print("Vibe native helper transport passed")
 

@@ -7,6 +7,7 @@
 #include <logonomic_cli_addon/json.h>
 
 #include <array>
+#include <chrono>
 #include <exception>
 #include <filesystem>
 #include <iostream>
@@ -36,6 +37,9 @@ std::string read_input()
 
 void deliver(int argc, char** argv)
 {
+    // Vibe kills the whole hook tree after five seconds. Complete SDK cleanup
+    // inside that window so a slow host remains a silent observational no-op.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(3500);
     addon::Contract_failure failure;
     auto environment = addon::read_helper_environment(&failure);
     if (!environment || environment->package_id != "logonomic.cli.vibe" || argc > 2) {
@@ -72,7 +76,9 @@ void deliver(int argc, char** argv)
     if (!event) {
         return;
     }
-    addon::Helper_client client(std::move(*environment));
+    addon::Helper_client client(std::move(*environment), [deadline] {
+        return std::chrono::steady_clock::now() >= deadline;
+    });
     const auto key = addon::random_nonce_hex();
     const auto outcome = client.deliver_provider_event(event->name, event->body, key);
     if (outcome.committed) {

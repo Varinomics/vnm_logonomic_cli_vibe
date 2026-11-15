@@ -65,7 +65,7 @@ function(vibe_target target)
     endif()
 endfunction()
 
-add_library(vibe_provider STATIC src/vibe_launcher.cpp src/vibe_config.cpp src/vibe_events.cpp)
+add_library(vibe_provider STATIC src/vibe_launcher.cpp src/vibe_config.cpp src/vibe_events.cpp src/vibe_resume.cpp)
 target_include_directories(vibe_provider PUBLIC src)
 target_link_libraries(vibe_provider PUBLIC logonomic_cli_addon_sdk::sdk)
 vibe_target(vibe_provider)
@@ -76,12 +76,14 @@ vibe_target(vibe_adapter)
 add_executable(logonomic_vibe_hook src/vibe_hook.cpp)
 target_link_libraries(logonomic_vibe_hook PRIVATE vibe_provider)
 vibe_target(logonomic_vibe_hook)
+logonomic_cli_addon_add_launch_bridge(vibe_launch_bridge)
+vibe_target(vibe_launch_bridge)
 
 logonomic_cli_addon_package_platform(VIBE_PLATFORM)
 set(VIBE_EXECUTABLE_SUFFIX "${CMAKE_EXECUTABLE_SUFFIX}")
 configure_file(package/logonomic-cli-addon.json.in generated/logonomic-cli-addon.json @ONLY)
 logonomic_cli_addon_add_package(vibe_package logonomic.cli.vibe VIBE_PACKAGE_DIRECTORY
-    ADAPTER vibe_adapter HELPERS logonomic_vibe_hook
+    ADAPTER vibe_adapter HELPERS logonomic_vibe_hook vibe_launch_bridge
     INDEX_ARGUMENTS --third-party "adapter/vibe_adapter${CMAKE_EXECUTABLE_SUFFIX}"
         "notices/tomlplusplus-LICENSE.txt" "provenance/tomlplusplus.json")
 
@@ -104,7 +106,7 @@ add_test(NAME vibe_events_tests COMMAND vibe_events_tests
     "${CMAKE_CURRENT_SOURCE_DIR}/package/capabilities/lifecycle-events@2.json")
 add_executable(vibe_fake_cli tests/vibe_fake_cli.cpp)
 vibe_target(vibe_fake_cli)
-find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
+find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
 add_test(NAME vibe_hook_tests COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/vibe_hook_tests.py"
     "$<TARGET_FILE:logonomic_vibe_hook>" "$<TARGET_FILE:vibe_fake_cli>")
