@@ -7,6 +7,11 @@
     "vibe/cli-rust/src/cli.rs",
     "vibe/core/hooks/models.py",
     "vibe/app_server/_host_hooks.py",
+    "vibe/app_server/_unified_harness_backend_adapter.py",
+    "vibe/core/config/layers/environment.py",
+    "vibe/core/config/default_orchestrator.py",
+    "vibe/core/agents/models.py",
+    "harness/runtimes/python/python/mistralai_vibe_local_harness/vibe/_storage.py",
     "vibe/plugins/builtins/vibe/skills/vibe/SKILL.md"
   ]
 }
