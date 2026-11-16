@@ -102,9 +102,6 @@ std::optional<addon::Provider_event> compact_hook_event(
         event.body.set("source", addon::Json_value(*source));
         event.body.set("vibe_home", addon::Json_value(vibe_home));
         event.body.set("transcript_path", addon::Json_value(*transcript));
-        if (const auto model = text(payload, "model", 256)) {
-            event.body.set("model", addon::Json_value(*model));
-        }
         if (const auto cwd = text(payload, "cwd", 4096)) {
             event.body.set("cwd", addon::Json_value(*cwd));
         }
@@ -188,16 +185,21 @@ addon::Classify_event_result classify_event(const addon::Classify_event_request&
                 }
             }
         }
-        if (request.execution_model_version == 1) {
-            if (const auto model = text(event.body, "model", 256)) {
-                addon::Execution_model_update update{
-                    std::string(*session_id), {}, std::string(*model), addon::Execution_model_source::SESSION};
-                if (addon::is_valid_execution_model_update(update)) {
-                    result.model_updates.push_back(std::move(update));
-                }
-                else {
-                    result.model_failure = addon::Contract_failure{"vibe_model_invalid", {}};
-                }
+        // Vibe's hook and session pin name only the active model alias; its
+        // configured API model, provider routing and fallback stay inside Vibe.
+        // That alias is a selection, so this surface reports the root model as
+        // unavailable for the activation it opens.
+        if (request.model_state_version == 1) {
+            addon::Model_update update;
+            update.provider_session_id = *session_id;
+            update.transition_nonce = request.transition_nonce;
+            update.status = addon::Model_status::UNAVAILABLE;
+            update.source = "vibe.session_start";
+            if (addon::is_valid_model_update(update)) {
+                result.model_updates.push_back(std::move(update));
+            }
+            else {
+                result.model_failure = addon::Contract_failure{"vibe_model_state_invalid", {}};
             }
         }
     }

@@ -4,3 +4,5 @@
 *.json text eol=lf
 *.py text eol=lf
 *.yml text eol=lf
+# Configuration compares this notice byte-for-byte with upstream's LF LICENSE.
+package/notices/tomlplusplus-LICENSE.txt text eol=lf

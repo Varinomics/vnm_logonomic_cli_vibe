@@ -20,8 +20,7 @@ void projection_generation()
         fixture::json(R"([{"id":"first","type":"message"}])"),
         fixture::json(R"([{"id":"last","type":"checkpoint"}])")});
     auto snapshot = vibe::read_native_snapshot(store.transcript, "root-session");
-    fixture::require(snapshot.snapshot && !snapshot.snapshot->selected_model_alias,
-        "following the native default suppressed the session");
+    fixture::require(snapshot.snapshot.has_value(), "following the native default suppressed the session");
     fixture::require(snapshot.snapshot->context_window == 262144 &&
         snapshot.snapshot->working_directory == store.root.generic_string(),
         "native context capacity or workspace was lost");

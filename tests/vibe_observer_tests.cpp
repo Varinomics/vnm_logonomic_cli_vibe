@@ -56,7 +56,7 @@ void reserve(vibe::Observer& observer, std::string_view nonce = k_nonce)
 }
 
 Invocation observation(const Store_fixture& store, std::string watch_cursor = {},
-    std::string_view nonce = k_nonce, bool models = false)
+    std::string_view nonce = k_nonce)
 {
     Invocation call;
     call.input.operation = "observe";
@@ -67,13 +67,12 @@ Invocation observation(const Store_fixture& store, std::string watch_cursor = {}
     request.resume_cursor = std::move(watch_cursor);
     request.window_ms = 60000;
     request.correlation = addon::Session_correlation{std::string(nonce)};
-    request.execution_model_version = models ? 1 : 0;
     call.input.payload = addon::encode_observe_request(request);
     return call;
 }
 
 Invocation poll(vibe::Observer& observer, std::string consumption = {}, std::size_t limit = 16,
-    std::string_view nonce = k_nonce, bool models = false)
+    std::string_view nonce = k_nonce)
 {
     Invocation call;
     call.input.operation = "poll_observations";
@@ -81,7 +80,6 @@ Invocation poll(vibe::Observer& observer, std::string consumption = {}, std::siz
     request.resume_cursor = std::move(consumption);
     request.limit = limit;
     request.correlation = addon::Session_correlation{std::string(nonce)};
-    request.execution_model_version = models ? 1 : 0;
     call.input.payload = addon::encode_poll_observations_request(request);
     observer.handle_observation(call);
     return call;
@@ -107,7 +105,7 @@ void bind(vibe::Observer& observer, const Store_fixture& store)
         "bound nonce was moved to another session");
 }
 
-void optional_execution_context_failures()
+void optional_request_failures()
 {
     Store_fixture store;
     auto state = runtime();
@@ -121,26 +119,30 @@ void optional_execution_context_failures()
     const auto baseline_poll = poll(observer);
     require(baseline_poll.success && page(baseline_poll).observations.size() == 1,
         "baseline child observation was not queued");
-    const auto failure = json(R"({"version":1,"failure":{"reason_code":"unsupported_version","detail":"execution_context request is malformed or its version is unsupported"}})");
-    for (const auto& invalid : {json(R"({"version":99})"), json(R"("malformed")")}) {
-        auto watch = observation(store);
-        watch.input.payload.set("execution_context", invalid);
-        observer.handle_observation(watch);
-        auto expected_watch = baseline_watch.output;
-        expected_watch.set("execution_context", failure);
-        require(watch.success && watch.output == expected_watch,
-            "optional execution-context failure was lost or changed the watch cursor");
+    for (const char* member : {"execution_context", "model_state"}) {
+        auto failure = json(R"({"version":1,"failure":{"reason_code":"unsupported_version"}})");
+        failure.find("failure")->set("detail",
+            addon::Json_value(std::string(member) + " request is malformed or its version is unsupported"));
+        for (const auto& invalid : {json(R"({"version":99})"), json(R"("malformed")")}) {
+            auto watch = observation(store);
+            watch.input.payload.set(member, invalid);
+            observer.handle_observation(watch);
+            auto expected_watch = baseline_watch.output;
+            expected_watch.set(member, failure);
+            require(watch.success && watch.output == expected_watch,
+                "optional request failure was lost or changed the watch cursor");
 
-        // Replay the same unacknowledged page with an invalid optional request.
-        // The lifecycle payload and cursor must remain byte-for-byte equivalent.
-        Invocation replay;
-        replay.input = baseline_poll.input;
-        replay.input.payload.set("execution_context", invalid);
-        observer.handle_observation(replay);
-        auto expected_poll = baseline_poll.output;
-        expected_poll.set("execution_context", failure);
-        require(replay.success && replay.output == expected_poll,
-            "optional execution-context failure was lost or changed the lifecycle page");
+            // Replay the same unacknowledged page with an invalid optional request.
+            // The lifecycle payload and cursor must remain byte-for-byte equivalent.
+            Invocation replay;
+            replay.input = baseline_poll.input;
+            replay.input.payload.set(member, invalid);
+            observer.handle_observation(replay);
+            auto expected_poll = baseline_poll.output;
+            expected_poll.set(member, failure);
+            require(replay.success && replay.output == expected_poll,
+                "optional request failure was lost or changed the lifecycle page");
+        }
     }
 }
 
@@ -390,61 +392,6 @@ void fast_runs_and_regression()
     require(!watch.success && watch.reason == "vibe_child_generation_regressed", "old native child state resurrected a stopped run");
 }
 
-void selected_model_changes()
-{
-    Store_fixture store;
-    vibe::Observer observer;
-    auto state = runtime();
-    store.publish(state);
-    bind(observer, store);
-    auto watch = observation(store, {}, k_nonce, true);
-    observer.handle_observation(watch);
-    require(page(poll(observer, {}, 16, k_nonce, true)).model_updates.empty(),
-        "a possibly historical startup pin was reported as a live selection");
-
-    watch = observation(store, {}, k_nonce, true);
-    watch.stop_after = 4;
-    watch.on_wait = [&](unsigned count) {
-        if (count == 1) {
-            state.find("session_metadata")->set("active_model", addon::Json_value("provider/model-b"));
-        }
-        if (count == 2) {
-            set_child(state, child());
-        }
-        if (count == 3) {
-            state.find("session_metadata")->set("active_model", addon::Json_value("provider/model-c"));
-        }
-        if (count < 4) {
-            store.publish(state);
-        }
-    };
-    observer.handle_observation(watch);
-    require(watch.success, "live model observation failed");
-    const auto first_call = poll(observer, {}, 1, k_nonce, true);
-    const auto first = page(first_call, 1);
-    require(first.model_updates.size() == 1 && first.observations.empty() && first.more,
-        "model-only page did not use the replayable consumption cursor");
-    require(first_call.output == poll(observer, {}, 1, k_nonce, true).output,
-        "unacknowledged model page could not be retried");
-    require(first.model_updates.front().model == "provider/model-b" &&
-        first.model_updates.front().provider_session_id == "root-session" &&
-        first.model_updates.front().agent_id.empty(), "root model labelled another subject");
-    const auto second = page(poll(observer, first.resume_cursor, 1, k_nonce, true), 1);
-    require(second.observations.size() == 1 && second.model_updates.empty() && second.more,
-        "root model was copied to a child without native child-model evidence");
-    const auto third = page(poll(observer, second.resume_cursor, 1, k_nonce, true), 1);
-    require(third.model_updates.size() == 1 && third.model_updates.front().model == "provider/model-c" && !third.more,
-        "later selected model was lost behind a child page");
-    require(page(poll(observer, third.resume_cursor, 1, k_nonce, true), 1).model_updates.empty(),
-        "acknowledged model update remained queued");
-
-    state.find("session_metadata")->set("active_model", addon::Json_value("provider/model-d"));
-    store.publish(state);
-    watch = observation(store, {}, k_nonce, true);
-    observer.handle_observation(watch);
-    require(page(poll(observer, third.resume_cursor)).model_updates.empty(),
-        "model data was emitted without result negotiation");
-}
 } // namespace
 
 int main()
@@ -455,8 +402,7 @@ int main()
         unavailable_and_retirement();
         labels();
         fast_runs_and_regression();
-        selected_model_changes();
-        optional_execution_context_failures();
+        optional_request_failures();
         current_context_carriers();
         std::cout << "Vibe continuous observer tests passed\n";
         return 0;

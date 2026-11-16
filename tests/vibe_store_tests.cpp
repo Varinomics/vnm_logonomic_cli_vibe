@@ -17,7 +17,6 @@ void identities()
     auto read = vibe::read_native_snapshot(store.transcript, "root-session");
     require(read.snapshot.has_value(), "valid native root snapshot rejected");
     require(read.snapshot->children.empty(), "empty root invented a child");
-    require(read.snapshot->selected_model_alias == "selected-model", "recorded model pin lost");
     const auto again = vibe::read_native_snapshot(store.transcript, "root-session", read.snapshot->current_sha256);
     require(again.unchanged && !again.snapshot && again.reason.empty(), "unchanged pointer did not use bounded cache");
 
@@ -37,12 +36,11 @@ void identities()
     state.find("identity")->set("kind", addon::Json_value("subagent"));
     state.find("identity")->set("depth", addon::Json_value(1));
     state.find("session_metadata")->set("subagent_spawn_key", addon::Json_value("spawn-key"));
-    state.find("session_metadata")->set("active_model", addon::Json_value());
     state.set("subagents", addon::Json_value());
     store.publish(state);
     read = vibe::read_native_snapshot(store.transcript, "root-session");
-    require(read.snapshot && read.snapshot->identity.kind == vibe::Native_session_kind::subagent &&
-        !read.snapshot->selected_model_alias, "child without its own model acquired a parent model");
+    require(read.snapshot && read.snapshot->identity.kind == vibe::Native_session_kind::subagent,
+        "native child session identity was rejected");
     state.set("subagents", json(R"({"children":{}})"));
     store.publish(state);
     require(!vibe::read_native_snapshot(store.transcript, "root-session").snapshot,

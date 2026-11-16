@@ -170,7 +170,11 @@ std::string hook_command(Hook_platform platform)
     // Vibe can use cmd, Git Bash or PowerShell on native Windows. Keeping all
     // outer-shell arguments plain ASCII avoids incompatible quoting rules.
     // The native helper inherits stdin; PowerShell does not parse the payload.
+    // Windows PowerShell serializes progress records, such as first-use module
+    // preparation for Test-Path, onto a redirected stderr as CLIXML. Silence
+    // progress in this process only; errors and the helper's streams remain.
     constexpr std::string_view script =
+        "$ProgressPreference = 'SilentlyContinue'; "
         "if ($env:VNM_VIBE_HOOK -and (Test-Path -LiteralPath $env:VNM_VIBE_HOOK -PathType Leaf)) "
         "{ & $env:VNM_VIBE_HOOK; exit $LASTEXITCODE }";
     std::string utf16;

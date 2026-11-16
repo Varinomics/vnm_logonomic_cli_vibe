@@ -253,12 +253,6 @@ Native_store_result read_native_snapshot(const fs::path& transcript, std::string
     result.snapshot_sequence = *sequence;
     result.current_sha256 = current_digest;
     const auto* metadata = runtime->find("session_metadata");
-    const auto* model = metadata ? metadata->find("active_model") : nullptr;
-    // An empty pin means "follow default". The effective alias is written at
-    // the next native turn; optional model evidence never invalidates children.
-    if (model && model->is_string() && bounded_text(model->as_string(), 256)) {
-        result.selected_model_alias = model->as_string();
-    }
     if (const auto* cwd = metadata ? text(*metadata, "cwd") : nullptr;
         cwd && bounded_text(*cwd, 32768) && addon::path_from_utf8(*cwd).is_absolute())
     {

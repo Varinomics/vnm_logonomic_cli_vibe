@@ -296,8 +296,8 @@ Native_usage_read read_record(const fs::path& transcript)
     usage.counter_field = "session.tokenUsage.totalTokens";
     usage.source_counter_semantics = "cumulative_final";
     usage.aggregate_evidence = "partial";
-    // selected_model_alias is a current pin, not attribution of accumulated
-    // billing. Native child calls likewise do not persist per-call models.
+    // The native active_model alias is a current pin, not attribution of
+    // accumulated billing. Native child calls do not persist per-call models.
     addon::Contract_failure failure;
     require(addon::decode_usage_record(addon::encode_usage_record(usage), &failure).has_value(),
         "vibe_usage_record_invalid");

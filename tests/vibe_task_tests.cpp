@@ -114,7 +114,7 @@ addon::Structured_inspect_result inspect(std::string state, std::string bytes, b
     addon::Structured_inspect_request request;
     request.purpose = addon::Structured_purpose::IMPLEMENTATION;
     request.inspection = {std::move(state), std::move(bytes), "diagnostics are not an answer", final, timed_out, exit_code};
-    request.execution_model_version = model_version;
+    request.model_state_version = model_version;
     Invocation call;
     call.input.operation = "inspect";
     call.input.payload = addon::encode_structured_inspect_request(request);
@@ -232,7 +232,7 @@ void incremental_completion(const fs::path& fake_cli)
     require(!duplicate.complete && duplicate.presentation.empty(), "duplicate native entry changed the continuation");
     const auto result = inspect(duplicate.protocol_state, "", true, 0, false, 1);
     require(result.complete && result.protocol_state.empty() && result.result_bytes == "Completed with π and 雪.\nSecond line." &&
-        !result.failure_reason && !result.execution_model && result.model_failure &&
+        !result.failure_reason && !result.model_observation && result.model_failure &&
         result.model_failure->reason_code == "vibe_task_model_unavailable", "native completion or model availability was invented");
     require(result.presentation_state == addon::Presentation_state::AVAILABLE &&
         result.presentation.front().kind == addon::Presentation_event_kind::RESULT_AUTHENTICATED,

@@ -489,14 +489,17 @@ def run(arguments):
             "event": starts[0]["event"],
             "ledger": {"current_epoch": 0, "current_transition": None},
             "transition_nonce": "2" * 32,
-            "execution_model": {"version": 1},
+            "model_state": {"version": 1},
             "execution_context": {"version": 1},
         })
-        models = classification["execution_model"]["updates"]
+        # Native session_start names only the active model alias. The joint
+        # root fact is therefore unavailable rather than a confirmed alias.
+        models = classification["model_state"]["updates"]
         require(len(models) == 1 and models[0] == {
             "provider_session_id": starts[0]["event"]["body"]["session_id"],
-            "agent_id": "", "model": "mock-model", "source": "session",
-        }, "The native selected model did not survive helper delivery and classification")
+            "transition_nonce": "2" * 32, "sequence": "0", "state": "unavailable",
+            "agent_id": "", "provider": "", "model": "", "source": "vibe.session_start",
+        }, "The native root model state lost its activation or confirmed an alias")
         directories = classification["execution_context"]["updates"]
         require(directories == [{
             "provider_session_id": starts[0]["event"]["body"]["session_id"],

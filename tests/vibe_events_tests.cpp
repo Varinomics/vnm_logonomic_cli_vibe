@@ -198,36 +198,42 @@ void compact_payloads()
     require(!vibe::compact_hook_event("session_start", payload, native_path("vibe-home")), "relative native transcript directory was accepted");
 }
 
-void selected_model()
+void root_model_state()
 {
+    // Native Vibe documents this member as the active model alias, which maps
+    // to a separately configured API model and provider inside Vibe.
     auto payload = native_event("session_start");
     payload.set("source", addon::Json_value("startup"));
-    payload.set("model", addon::Json_value("provider/coding-model"));
+    payload.set("model", addon::Json_value("mistral-medium-3.5"));
     auto input = request(compact("session_start", payload), false);
     require(classify(input).model_updates.empty(), "unnegotiated model data was emitted");
-    input.execution_model_version = 1;
+    input.model_state_version = 1;
     auto result = classify(input);
-    require(result.model_updates.size() == 1 && !result.model_failure,
-        "native startup model was discarded");
+    require(result.classification == addon::Classification::TRANSITION &&
+        result.model_updates.size() == 1 && !result.model_failure,
+        "negotiated root model state was not reported with its session transition");
     const auto& model = result.model_updates.front();
-    require(model.provider_session_id == k_session && model.agent_id.empty() &&
-        model.model == "provider/coding-model" && model.source == addon::Execution_model_source::SESSION,
-        "startup model lost its native identity or literal spelling");
+    require(model.provider_session_id == k_session && model.transition_nonce == k_nonce &&
+        model.sequence == 0 && model.agent_id.empty() && model.status == addon::Model_status::UNAVAILABLE &&
+        model.provider.empty() && model.model.empty() && !model.reasoning_effort &&
+        model.source == "vibe.session_start",
+        "a native model alias became a resolved model, or the fact left its source activation");
 
-    input.event.body.set("model", addon::Json_value("invalid\nmodel"));
+    payload.set("session_id", addon::Json_value("native\x01session"));
+    input = request(compact("session_start", payload), false);
+    input.model_state_version = 1;
     result = classify(input);
-    require(result.model_updates.empty() && result.model_failure &&
-        result.classification == addon::Classification::TRANSITION,
-        "invalid optional model suppressed a valid session transition");
-    input.event.body.set("model", addon::Json_value());
-    result = classify(input);
-    require(result.model_updates.empty() && !result.model_failure,
-        "absent native model was filled from a default");
+    require(result.classification == addon::Classification::TRANSITION && result.model_updates.empty() &&
+        result.model_failure && result.model_failure->reason_code == "vibe_model_state_invalid",
+        "an unrepresentable root model state suppressed lifecycle or was emitted");
 
     input = request(compact("pre_agent", native_event("pre_agent")));
-    input.model_failure = addon::Contract_failure{"unsupported_model_version", {}};
+    input.model_state_version = 1;
+    require(classify(input).model_updates.empty(), "a later hook acquired an activation from host arrival state");
+    input.model_state_version = 0;
+    input.model_failure = addon::Contract_failure{"unsupported_version", {}};
     result = classify(input);
-    require(result.model_failure && result.model_failure->reason_code == "unsupported_model_version" &&
+    require(result.model_failure && result.model_failure->reason_code == "unsupported_version" &&
         result.observations.size() == 1, "optional request failure changed lifecycle classification");
 }
 
@@ -311,7 +317,7 @@ int main(int argc, char** argv)
         phases_and_attention();
         correlation_and_unsupported_events();
         compact_payloads();
-        selected_model();
+        root_model_state();
         execution_directory();
         optional_context_failure_scope();
         std::cout << "Vibe lifecycle contracts passed\n";

@@ -150,7 +150,8 @@ void windows_command_is_shell_neutral()
         require((*decoded)[i + 1] == '\0', "PowerShell command contains unexpected non-ASCII code");
         script += (*decoded)[i];
     }
-    require(script == "if ($env:VNM_VIBE_HOOK -and (Test-Path -LiteralPath $env:VNM_VIBE_HOOK -PathType Leaf)) "
+    require(script == "$ProgressPreference = 'SilentlyContinue'; "
+        "if ($env:VNM_VIBE_HOOK -and (Test-Path -LiteralPath $env:VNM_VIBE_HOOK -PathType Leaf)) "
         "{ & $env:VNM_VIBE_HOOK; exit $LASTEXITCODE }", "PowerShell guard or stdin forwarding changed");
 }
 

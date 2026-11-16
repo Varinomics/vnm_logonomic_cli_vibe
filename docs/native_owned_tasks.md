@@ -120,9 +120,10 @@ failure, as required by the SDK.
 
 Native completion is evidence that the native turn finished; it is not an
 independent assessment of the quality or correctness of the model's work.
-The stream also does not identify the effective model. An opted-in
-execution-model request receives explicit unavailable evidence rather than an
-alias borrowed from the launcher or a separate interactive session.
+Native public history entries carry no model identity, so the stream does not
+identify the effective model. An inspection that opts into model-state@1
+receives explicit vibe_task_model_unavailable evidence rather than an alias
+borrowed from the launcher or a separate interactive session.
 
 Native outcome and child-wait handling are in
 [headless/turn.rs](https://github.com/mistralai/mistral-vibe/blob/b20313e01d6926d4191da89c32d5da11e3a0a060/vibe/cli-rust/src/headless/turn.rs).

@@ -6,7 +6,7 @@ CLI, built with the public [Logonomic CLI add-on SDK](https://github.com/Varinom
 **Package:** `logonomic.cli.vibe` · **Version:** `0.1.0` · **Minimum Vibe:** `3.1.1`
 
 The package discovers Vibe, prepares its native hooks, tracks the foreground
-conversation and observed child runs, reports native model and context evidence,
+conversation and observed child runs, reports native context evidence,
 scans persisted token usage, exports conversation history, and resumes a
 remembered conversation by its full session ID. It contains a C++20 adapter,
 a native hook helper, the SDK launch bridge, capability sidecars, an integrity
@@ -25,7 +25,7 @@ fail their affected capability when the store contract is unfamiliar.
 | `lifecycle-events@2` | Native session start/resume/end, confirmed root working status, inferred root completion/attention hints, and continuous observation of native child runs. |
 | `helper-ingress@2` | Delivers bounded native hook events through the SDK helper client and checks the host's active session ledger. |
 | `lifecycle-correlation-lifetime@1` | Reserves and retires exact native activation bindings; observation pages remain replayable until acknowledged. |
-| `execution-model@1` | Root model alias from native session start and later observed native pin changes; the host displays the last admitted fact. |
+| `model-state@1` | Reports the root model as unavailable at each native session start, because Vibe exposes only the selected alias. Owned tasks report their model as unavailable. |
 | `execution-context@1` | Exact native default directory at session start, jointly attributed to that activation. |
 | `model-context-delivery@2` | Host-owned title/summary and other model guidance through the hidden native session-start context channel, fenced to the captured activation. |
 | `context-state@2` | Native context occupancy and capacity; fresh, explicitly incomplete successful-compaction history lower bounds. |
@@ -93,7 +93,7 @@ idempotent. A conflicting or modified reserved hook is reported as
 
 | Owned hook | Native event | Purpose |
 | --- | --- | --- |
-| `logonomic-vibe-session-start` | `session_start` | Capture startup, resume, clear, or fork identity, native path, model alias and cwd; request activation-bound host guidance. |
+| `logonomic-vibe-session-start` | `session_start` | Capture startup, resume, clear, or fork identity, native path and cwd; request activation-bound host guidance. |
 | `logonomic-vibe-pre-agent` | `pre_agent`, `match = "main"` | Observe root turn start, including a root fork, without treating subagents as the foreground conversation. |
 | `logonomic-vibe-notification` | `notification` | Observe completion/failure and requests for user attention. |
 | `logonomic-vibe-session-end` | `session_end` | Observe termination of the current native session. |
@@ -104,8 +104,8 @@ absent. POSIX uses a quoted shell guard; Windows uses a fixed PowerShell encoded
 command so the helper path is passed literally across native shell choices.
 No package path is pinned in the persistent hooks file.
 
-The hook helper forwards only the fields used for identity, lifecycle, model,
-and directory classification. Prompt text, responses, tool output, and
+The hook helper forwards only the fields used for identity, lifecycle, and
+directory classification. Prompt text, responses, tool output, and
 notification messages are discarded. Input is bounded to 1 MiB. Event delivery,
 acknowledgment, and the optional guidance request share a 3.5-second deadline
 inside Vibe's 5-second hook timeout. Malformed input or unavailable host delivery
@@ -141,13 +141,13 @@ outcome; several entirely completed runs between samples cannot all be
 reconstructed from that one retained outcome. Unsupported/corrupt evidence and
 capacity failures are reported instead of fabricating an empty child graph.
 
-The displayed model is the last admitted native execution fact. Native startup
-reports the actual selected alias; later observed pin changes update it. An
-empty "follow default" pin retains the preceding fact until Vibe produces a
-concrete native report. This is not instantaneous model-picker tracking. The
-initial persisted pin is not reused as live evidence on resume, and child
-models remain unknown because Vibe keeps their call-model information in the
-live app-server's memory rather than this store.
+Vibe's session-start hook and persisted session pin name the active model
+alias. Vibe maps that alias to a separately configured API model and provider,
+and its routing or fallback can serve another model, so neither surface
+establishes the model actually serving the session. Each native session start
+therefore reports the root model as unavailable for that activation instead of
+presenting the alias. Child models are not reported because Vibe keeps their
+call-model information in the live app-server's memory rather than this store.
 
 The execution directory is Vibe's actual default cwd captured at session start,
 including a nested directory. It is not inferred from a repository root or
@@ -302,9 +302,9 @@ structured tool results, role-correct discarded content, and cancellation.
 Linux qualification runs the official Vibe **3.1.2** executable against the
 upstream account-free localhost scripted model endpoint. It exercises real
 native parent/child turns, hook delivery, persisted child observations, exact
-interactive resume through the packaged bridge, source model/cwd reports,
-native context versus billing counters, stable usage identities and selected
-cache reuse, and all three full/compact export formats. The exported discussion
+interactive resume through the packaged bridge, root model availability and
+source cwd reports, native context versus billing counters, stable usage
+identities and selected cache reuse, and all three full/compact export formats. The exported discussion
 excludes hidden model guidance. The scripted endpoint establishes native
 transport and data behavior; it does not establish that a model obeys title or
 summary instructions. No paid model backend is needed by this qualification.
@@ -333,10 +333,11 @@ the native hook and store contracts.
 
 ### CI setup
 
-[`Provider CI`](.github/workflows/ci.yml) calls the organization's reusable
-`cli-addon-provider.yml` workflow with `provider: vibe`. The repository must
-have access to the existing **`VARINOMICS_REPO_READ_TOKEN`** secret, including
-read access to this repository and the private Logonomic SDK repository.
+[`Provider CI`](.github/workflows/ci.yml) runs only when dispatched manually. It
+calls the organization's reusable `cli-addon-provider.yml` workflow with
+`provider: vibe`. The repository must have access to the existing
+**`VARINOMICS_REPO_READ_TOKEN`** secret, including read access to this
+repository and the private Logonomic SDK repository.
 
 A checkout failure with `Input required and not supplied: token` means the
 workflow did not receive that secret. Enable the secret for this repository,

@@ -145,15 +145,13 @@ std::vector<addon::Lifecycle_observation> differences(std::string_view owner,
 struct Observer::Impl {
     struct Queued {
         std::uint64_t index = 0;
-        std::optional<addon::Lifecycle_observation> observation;
-        std::optional<addon::Execution_model_update> model;
+        addon::Lifecycle_observation observation;
     };
     struct Binding {
         std::string session_id;
         std::filesystem::path transcript;
         std::string current_sha256;
         std::string generation;
-        std::optional<std::string> selected_model_alias;
         std::map<std::string, Native_child> children;
         std::deque<Queued> queue;
         std::uint64_t produced = 0;
@@ -172,8 +170,7 @@ struct Observer::Impl {
         return item == bindings.end() ? nullptr : item->second;
     }
 
-    std::string accept_snapshot(
-        Binding& binding, Native_snapshot snapshot, std::uint64_t& added, bool collect_model = false)
+    std::string accept_snapshot(Binding& binding, Native_snapshot snapshot, std::uint64_t& added)
     {
         if (!binding.generation.empty() && snapshot.generation < binding.generation) return "vibe_store_generation_regressed";
         for (const auto& child : snapshot.children) {
@@ -182,38 +179,19 @@ struct Observer::Impl {
                 *child.turn_generation < *old->second.turn_generation) return "vibe_child_generation_regressed";
         }
         auto batch = differences(binding.session_id, binding.children, snapshot.children, binding.current_sha256.empty());
-        std::optional<addon::Execution_model_update> model;
-        // The hook supplies the live startup model. The first persisted pin
-        // can predate a resume; only later changes in this bound execution
-        // establish another live selection. Empty pins follow Vibe's default
-        // and become a concrete alias when Vibe next starts a turn.
-        if (collect_model && !binding.current_sha256.empty() && snapshot.selected_model_alias &&
-            snapshot.selected_model_alias != binding.selected_model_alias)
-        {
-            addon::Execution_model_update update{
-                binding.session_id, {}, *snapshot.selected_model_alias, addon::Execution_model_source::SESSION};
-            if (addon::is_valid_execution_model_update(update)) {
-                model = std::move(update);
-            }
-        }
-        if (binding.queue.size() + batch.size() + (model ? 1 : 0) > k_max_queued_observations) {
+        if (binding.queue.size() + batch.size() > k_max_queued_observations) {
             return "vibe_observer_queue_full";
         }
         for (auto& observation : batch) {
             const auto index = ++binding.produced;
             observation.provider_sequence = std::to_string(index);
-            binding.queue.push_back({index, std::move(observation), std::nullopt});
-            ++added;
-        }
-        if (model) {
-            binding.queue.push_back({++binding.produced, std::nullopt, std::move(model)});
+            binding.queue.push_back({index, std::move(observation)});
             ++added;
         }
         binding.children.clear();
         for (auto& child : snapshot.children) binding.children.emplace(child.session_id, std::move(child));
         binding.current_sha256 = std::move(snapshot.current_sha256);
         binding.generation = std::move(snapshot.generation);
-        binding.selected_model_alias = std::move(snapshot.selected_model_alias);
         return {};
     }
 
@@ -283,8 +261,7 @@ struct Observer::Impl {
                 {
                     std::lock_guard lock(mutex);
                     if (binding->retired) break;
-                    error = accept_snapshot(
-                        *binding, std::move(*read.snapshot), added, request->execution_model_version == 1);
+                    error = accept_snapshot(*binding, std::move(*read.snapshot), added);
                 }
                 if (!error.empty()) {
                     context.fail(addon::Result_status::FAILED, error);
@@ -360,12 +337,7 @@ struct Observer::Impl {
                 std::size_t count = 0;
                 for (const auto& queued : binding->queue) {
                     if (count++ == request->limit) break;
-                    if (queued.observation) {
-                        result.observations.push_back(*queued.observation);
-                    }
-                    if (queued.model && request->execution_model_version == 1) {
-                        result.model_updates.push_back(*queued.model);
-                    }
+                    result.observations.push_back(queued.observation);
                     last = queued.index;
                 }
                 binding->delivered = std::max(binding->delivered, last);

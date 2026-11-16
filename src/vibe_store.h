@@ -43,10 +43,6 @@ struct Native_snapshot {
     std::string generation;
     std::uint64_t snapshot_sequence = 0;
     std::string current_sha256;
-    // The native session's recorded model pin in this committed generation.
-    // This is a selected alias, never evidence of an actual model invocation.
-    // A child without its own pin stays unknown; do not fill it from its parent.
-    std::optional<std::string> selected_model_alias;
     std::optional<std::string> working_directory;
     std::optional<std::uint64_t> context_window;
     std::vector<Native_child> children;

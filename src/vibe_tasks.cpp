@@ -451,9 +451,9 @@ void inspect(addon::Invocation_context& context)
     if (!purpose_supported(request->purpose, context)) return;
     auto result = inspect_output(request->inspection);
     result.model_failure = request->model_failure;
-    if (request->execution_model_version == 1 && !result.model_failure) {
-        // The stream contains no effective-model identity. Do not substitute
-        // the selected launcher model or an unrelated interactive session.
+    if (request->model_state_version == 1 && !result.model_failure) {
+        // Native public history entries carry no model identity. Do not
+        // substitute the selected launcher alias or an interactive session.
         result.model_failure = addon::Contract_failure{"vibe_task_model_unavailable", {}};
     }
     auto payload = addon::encode_structured_inspect_result(result, request->report_failure_diagnostics);
