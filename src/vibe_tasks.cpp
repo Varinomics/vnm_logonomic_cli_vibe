@@ -301,6 +301,21 @@ std::optional<std::string> consume_entry(Task_state& state, std::string_view lin
     }
     if (*type != "message" && *type != "reasoning" && *type != "effect" &&
         *type != "callback" && *type != "checkpoint" && *type != "notice") return "vibe_task_output_invalid";
+    const auto* outcome = entry->find("outcome");
+    const auto* outcome_type = outcome ? string_member(*outcome, "type") : nullptr;
+    bool discarded = false;
+    if ((*type == "message" || *type == "reasoning") && outcome && !outcome->is_null()) {
+        if (!outcome_type || (*outcome_type != "committed" && *outcome_type != "discarded")) {
+            return "vibe_task_output_invalid";
+        }
+        if (*outcome_type == "discarded") {
+            const auto* cause = string_member(*outcome, "cause");
+            if (!cause || cause->empty()) return "vibe_task_output_invalid";
+            if (*cause == "interrupt") return "vibe_task_interrupted";
+            if (*cause == "steer") return "vibe_task_foreign_output";
+            discarded = true;
+        }
+    }
     if (state.turn_id.empty() && *type != "message" && *type != "notice" && *type != "checkpoint") {
         return "vibe_task_unbound_output";
     }
@@ -313,6 +328,7 @@ std::optional<std::string> consume_entry(Task_state& state, std::string_view lin
             if (*role != "user" || *source != "turn_start" || !text || digest(*text) != state.prompt_digest) {
                 return "vibe_task_prompt_mismatch";
             }
+            if (discarded) return "vibe_task_input_discarded";
             state.turn_id = turn->as_string();
             state.input_entry_id = *id;
             ++counts[0];
@@ -323,13 +339,12 @@ std::optional<std::string> consume_entry(Task_state& state, std::string_view lin
         else if (*role == "assistant" && *source == "harness") {
             const auto text = message_text(*entry, false);
             const auto* input = string_member(*entry, "inputEntryId");
-            const auto* outcome = entry->find("outcome");
-            const auto* outcome_type = outcome ? string_member(*outcome, "type") : nullptr;
             if (!text || !input || *input != state.input_entry_id || !outcome_type ||
                 (*outcome_type != "committed" && *outcome_type != "discarded")) return "vibe_task_output_invalid";
-            // A later discarded draft must not authenticate an earlier
-            // intermediate response. A successful retry supplies a new answer.
-            state.answer = *outcome_type == "committed" ? *text : std::string{};
+            // The native projector can settle a superseded draft or reasoning
+            // a hook dropped after committing the answer. Generic "failure"
+            // describes that content's fate, not the owning turn's outcome.
+            if (!discarded) state.answer = *text;
             ++counts[2];
         }
         else if ((*role != "system" && *role != "user") || *source != "harness") {
@@ -338,9 +353,9 @@ std::optional<std::string> consume_entry(Task_state& state, std::string_view lin
     }
     else if (*type == "effect" || *type == "callback" || *type == "reasoning") {
         if (!turn->is_string() || state.turn_id.empty()) return "vibe_task_unbound_output";
-        // Assistant text preceding another tool/reasoning step is not yet the
-        // answer to the completed task.
-        state.answer.clear();
+        // A real subsequent step makes earlier text intermediate. Settling
+        // discarded reasoning is not a new step and cannot erase a commit.
+        if (!discarded) state.answer.clear();
         if (*type == "reasoning") {
             ++counts[1];
         }

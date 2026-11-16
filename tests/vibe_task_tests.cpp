@@ -261,14 +261,30 @@ void unsuccessful_native_results(const fs::path& fake_cli)
     failed(inspect("{}", bytes, true), "vibe_task_state_invalid");
     failed(inspect(state, prefix(prepared) + "\xff\n", true), "vibe_task_output_invalid");
     auto answer = message("draft", "assistant", "Discarded draft");
-    answer.set("outcome", json(R"({"type":"discarded","cause":"interrupted"})"));
-    failed(inspect(state, bytes + line(answer), true), "vibe_task_missing_answer");
+    answer.set("outcome", json(R"({"type":"discarded","cause":"interrupt"})"));
+    failed(inspect(state, bytes + line(answer), true), "vibe_task_interrupted");
+    failed(inspect(state, prefix(prepared) + line(answer) +
+        line(message("contradictory-answer", "assistant", "Cannot undo interruption")), true), "vibe_task_interrupted");
+    answer.set("outcome", json(R"({"type":"discarded","cause":"steer"})"));
+    failed(inspect(state, bytes + line(answer), true), "vibe_task_foreign_output");
+    answer.set("outcome", json(R"({"type":"discarded"})"));
+    failed(inspect(state, bytes + line(answer), true), "vibe_task_output_invalid");
     answer.set("outcome", addon::Json_value());
     failed(inspect(state, prefix(prepared) + line(answer), true), "vibe_task_output_invalid");
     answer.set("outcome", json(R"({"type":"discarded","cause":"retry"})"));
     const auto retried = inspect(state, prefix(prepared) + line(answer) +
         line(message("new-answer", "assistant", "Committed retry")), true);
     require(retried.result_bytes == "Committed retry", "successful native retry could not replace discarded draft");
+    auto reasoning = json(R"({"id":"dropped-reasoning","type":"reasoning","sessionId":"owned-session","turnId":"owned-turn","generationStatus":"completed","text":"A hook dropped this provisional reasoning","outcome":{"type":"discarded","cause":"failure"}})");
+    const auto settled = inspect(state, bytes + line(reasoning), true);
+    require(settled.result_bytes == "Plausible but unsuccessful.",
+        "discarded reasoning content fate became a false terminal-turn failure");
+    reasoning.find("outcome")->set("cause", addon::Json_value("interrupt"));
+    failed(inspect(state, bytes + line(reasoning), true), "vibe_task_interrupted");
+    auto skipped = message("input", "user", prepared.process.stdin_payload);
+    skipped.set("outcome", json(R"({"type":"discarded","cause":"skipped"})"));
+    failed(inspect(state, line(skipped) + line(message("answer", "assistant", "Never ran")), true),
+        "vibe_task_input_discarded");
 }
 
 void identity_and_policy_boundaries(const fs::path& fake_cli)
