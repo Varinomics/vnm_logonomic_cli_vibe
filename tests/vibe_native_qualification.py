@@ -363,7 +363,13 @@ def run(arguments):
             "event": starts[0]["event"],
             "ledger": {"current_epoch": 0, "current_transition": None},
             "transition_nonce": "2" * 32,
+            "execution_model": {"version": 1},
         })
+        models = classification["execution_model"]["updates"]
+        require(len(models) == 1 and models[0] == {
+            "provider_session_id": starts[0]["event"]["body"]["session_id"],
+            "agent_id": "", "model": "mock-model", "source": "session",
+        }, "The native selected model did not survive helper delivery and classification")
         record = next(observation["resume_record"] for observation in classification["observations"]
                       if "resume_record" in observation)
         session = Path(record["transcript_path"])
@@ -413,6 +419,7 @@ def run(arguments):
             "model_requests": len(server.requests), "resume_availability": inspected["availability"],
             "interactive_exact_resume": True, "native_store": str(session),
             "subagent_observer": observer_result,
+            "native_model_report": models[0],
         }
         write_json(root / "result.json", summary)
         print(json.dumps(summary, indent=2))

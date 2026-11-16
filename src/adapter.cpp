@@ -76,6 +76,7 @@ int main()
         {"presentation", 1}, {"launcher-discovery", 1}, {"launch-preparation", 3},
         {"managed-configuration", 1}, {"lifecycle-events", 2}, {"helper-ingress", 2},
         {"lifecycle-correlation-lifetime", 1},
+        {"execution-model", 1},
         {"interactive-resume", 2}, {"interactive-resume", 3},
     };
     addon::Adapter_runtime runtime(std::move(options));

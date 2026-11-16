@@ -102,6 +102,9 @@ std::optional<addon::Provider_event> compact_hook_event(
         event.body.set("source", addon::Json_value(*source));
         event.body.set("vibe_home", addon::Json_value(vibe_home));
         event.body.set("transcript_path", addon::Json_value(*transcript));
+        if (const auto model = text(payload, "model", 256)) {
+            event.body.set("model", addon::Json_value(*model));
+        }
         if (!resume_record(event.body)) {
             return std::nullopt;
         }
@@ -138,6 +141,7 @@ std::optional<addon::Provider_event> compact_hook_event(
 addon::Classify_event_result classify_event(const addon::Classify_event_request& request)
 {
     addon::Classify_event_result result;
+    result.model_failure = request.model_failure;
     const auto& event = request.event;
     const auto session_id = text(event.body, "session_id", addon::limits::k_max_lifecycle_identity_bytes);
     if (!session_id) {
@@ -157,6 +161,18 @@ addon::Classify_event_result classify_event(const addon::Classify_event_request&
         observation.session_transition = addon::Session_transition::STARTED;
         observation.session_source = *source;
         observation.resume_record = std::move(record);
+        if (request.execution_model_version == 1) {
+            if (const auto model = text(event.body, "model", 256)) {
+                addon::Execution_model_update update{
+                    std::string(*session_id), {}, std::string(*model), addon::Execution_model_source::SESSION};
+                if (addon::is_valid_execution_model_update(update)) {
+                    result.model_updates.push_back(std::move(update));
+                }
+                else {
+                    result.model_failure = addon::Contract_failure{"vibe_model_invalid", {}};
+                }
+            }
+        }
     }
     else {
         // Background notifications and session_end can arrive after a clear or

@@ -198,6 +198,39 @@ void compact_payloads()
     require(!vibe::compact_hook_event("session_start", payload, native_path("vibe-home")), "relative native transcript directory was accepted");
 }
 
+void selected_model()
+{
+    auto payload = native_event("session_start");
+    payload.set("source", addon::Json_value("startup"));
+    payload.set("model", addon::Json_value("provider/coding-model"));
+    auto input = request(compact("session_start", payload), false);
+    require(classify(input).model_updates.empty(), "unnegotiated model data was emitted");
+    input.execution_model_version = 1;
+    auto result = classify(input);
+    require(result.model_updates.size() == 1 && !result.model_failure,
+        "native startup model was discarded");
+    const auto& model = result.model_updates.front();
+    require(model.provider_session_id == k_session && model.agent_id.empty() &&
+        model.model == "provider/coding-model" && model.source == addon::Execution_model_source::SESSION,
+        "startup model lost its native identity or literal spelling");
+
+    input.event.body.set("model", addon::Json_value("invalid\nmodel"));
+    result = classify(input);
+    require(result.model_updates.empty() && result.model_failure &&
+        result.classification == addon::Classification::TRANSITION,
+        "invalid optional model suppressed a valid session transition");
+    input.event.body.set("model", addon::Json_value());
+    result = classify(input);
+    require(result.model_updates.empty() && !result.model_failure,
+        "absent native model was filled from a default");
+
+    input = request(compact("pre_agent", native_event("pre_agent")));
+    input.model_failure = addon::Contract_failure{"unsupported_model_version", {}};
+    result = classify(input);
+    require(result.model_failure && result.model_failure->reason_code == "unsupported_model_version" &&
+        result.observations.size() == 1, "optional request failure changed lifecycle classification");
+}
+
 void declared_profile(const char* path)
 {
     std::ifstream stream(path, std::ios::binary);
@@ -223,6 +256,7 @@ int main(int argc, char** argv)
         phases_and_attention();
         correlation_and_unsupported_events();
         compact_payloads();
+        selected_model();
         std::cout << "Vibe lifecycle contracts passed\n";
         return 0;
     }
