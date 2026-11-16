@@ -177,6 +177,8 @@ class ProtocolTests(unittest.TestCase):
         self.workspace.mkdir()
         self.adapter = Adapter(PACKAGE, self.root)
         self.addCleanup(self.adapter.close)
+        self.event_sequence = 0
+        self.session_nonces = {}
 
     def success(self, capability, version, operation, payload):
         response = self.adapter.invoke(capability, version, operation, payload)
@@ -227,14 +229,25 @@ class ProtocolTests(unittest.TestCase):
         }
 
     def event(self, name, body, current_session=None):
+        self.event_sequence += 1
+        nonce = f"{self.event_sequence:032x}"
+        self.success("lifecycle-correlation-lifetime", 1, "reserve", {"transition_nonce": nonce})
         transition = None if current_session is None else {
-            "kind": "start", "provider_session_id": current_session, "nonce": "1" * 32,
+            "kind": "start", "provider_session_id": current_session,
+            "nonce": self.session_nonces.get(current_session, "1" * 32),
         }
-        return self.success("helper-ingress", 2, "classify_event", {
+        result = self.success("helper-ingress", 2, "classify_event", {
             "event": {"name": name, "body": body},
             "ledger": {"current_epoch": 0 if transition is None else 1, "current_transition": transition},
-            "transition_nonce": "2" * 32,
+            "transition_nonce": nonce,
         })
+        if result["classification"] == "transition":
+            self.session_nonces[body["session_id"]] = nonce
+        else:
+            self.success("lifecycle-correlation-lifetime", 1, "retire", {
+                "transition_nonce": nonce, "disposition": "abandoned",
+            })
+        return result
 
     def native_start(self, session, source="startup"):
         native_home = self.home / ".vibe"
@@ -327,6 +340,37 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(response["status"], "unavailable", response)
             self.assertEqual(response["reason"], "unknown_operation", response)
         self.assertTrue(self.recognize("vibe")["recognized"])
+
+    def test_observation_binding_requires_reserved_frozen_context(self):
+        nonce = "e" * 32
+        payload = {
+            "event": {"name": "session_start", "body": self.native_start("root-session")},
+            "ledger": {"current_epoch": 0, "current_transition": None}, "transition_nonce": nonce,
+        }
+        refused = self.adapter.invoke("helper-ingress", 2, "classify_event", payload)
+        self.assertEqual(refused["status"], "unavailable", refused)
+        self.assertEqual(refused["reason"], "vibe_correlation_not_reserved", refused)
+        self.success("lifecycle-correlation-lifetime", 1, "reserve", {"transition_nonce": nonce})
+        started = self.success("helper-ingress", 2, "classify_event", payload)
+        self.assertEqual(started["classification"], "transition")
+        self.success("lifecycle-correlation-lifetime", 1, "reserve", {"transition_nonce": nonce})
+        payload["event"]["body"] = self.native_start("another-session")
+        refused = self.adapter.invoke("helper-ingress", 2, "classify_event", payload)
+        self.assertEqual(refused["status"], "unavailable", refused)
+        self.assertEqual(refused["reason"], "vibe_correlation_context_mismatch", refused)
+        polled = self.success("lifecycle-events", 2, "poll_observations", {
+            "resume_cursor": "", "limit": 16, "correlation": {"version": 1, "transition_nonce": nonce},
+        })
+        self.assertEqual(polled["observations"], [])
+        self.success("lifecycle-correlation-lifetime", 1, "retire", {
+            "transition_nonce": nonce, "disposition": "abandoned",
+        })
+        refused = self.adapter.invoke("lifecycle-events", 2, "poll_observations", {
+            "resume_cursor": polled["resume_cursor"], "limit": 16,
+            "correlation": {"version": 1, "transition_nonce": nonce},
+        })
+        self.assertEqual(refused["status"], "unavailable", refused)
+        self.assertEqual(refused["reason"], "vibe_correlation_unbound", refused)
 
     def test_recognition_does_not_claim_another_cli(self):
         self.assertTrue(self.recognize("vibe")["recognized"])

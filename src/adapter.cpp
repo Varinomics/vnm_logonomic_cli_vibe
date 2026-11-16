@@ -1,11 +1,13 @@
 #include "vibe_launcher.h"
 #include "vibe_config.h"
 #include "vibe_events.h"
+#include "vibe_observer.h"
 #include "vibe_resume.h"
 
 #include <logonomic_cli_addon/adapter_runtime.h>
 #include <logonomic_cli_addon/helper_ingress.h>
 #include <logonomic_cli_addon/managed_configuration.h>
+#include <logonomic_cli_addon/package_source.h>
 
 #include <exception>
 #include <utility>
@@ -36,7 +38,7 @@ void transform(addon::Invocation_context& context)
     }
 }
 
-void classify(addon::Invocation_context& context)
+void classify(addon::Invocation_context& context, vibe::Observer& observer)
 {
     addon::Contract_failure error;
     const auto request = addon::decode_classify_event_request(context.request().payload, &error);
@@ -44,28 +46,47 @@ void classify(addon::Invocation_context& context)
         context.fail(addon::Result_status::FAILED, error.reason_code, error.detail);
         return;
     }
-    context.succeed(addon::encode_classify_event_result(vibe::classify_event(*request)));
+    auto result = vibe::classify_event(*request);
+    if (result.classification == addon::Classification::TRANSITION) {
+        if (!observer.reserved(request->transition_nonce)) {
+            context.fail(addon::Result_status::UNAVAILABLE, "vibe_correlation_not_reserved");
+            return;
+        }
+        const auto* transcript = request->event.body.find("transcript_path");
+        if (!transcript || !transcript->is_string() || result.observations.empty() ||
+            !observer.bind(request->transition_nonce, result.observations.front().provider_session_id,
+                addon::path_from_utf8(transcript->as_string()))) {
+            context.fail(addon::Result_status::UNAVAILABLE, "vibe_correlation_context_mismatch");
+            return;
+        }
+    }
+    context.succeed(addon::encode_classify_event_result(result));
 }
 
 } // namespace
 
 int main()
 {
+    // Outlive the runtime and every invocation worker holding the handler.
+    vibe::Observer observer;
     addon::Adapter_runtime_options options;
     options.adapter_name = "mistral-vibe-addon";
     options.adapter_version = "0.1.0";
     options.capabilities = {
         {"presentation", 1}, {"launcher-discovery", 1}, {"launch-preparation", 3},
         {"managed-configuration", 1}, {"lifecycle-events", 2}, {"helper-ingress", 2},
+        {"lifecycle-correlation-lifetime", 1},
         {"interactive-resume", 2}, {"interactive-resume", 3},
     };
     addon::Adapter_runtime runtime(std::move(options));
-    runtime.set_invoke_handler([](addon::Invocation_context& context) {
+    runtime.set_invoke_handler([&observer](addon::Invocation_context& context) {
         try {
             const auto& request = context.request();
             if (context.cancel_requested()) context.fail(addon::Result_status::CANCELLED, "cancelled");
             else if (request.capability.capability_id == "managed-configuration" && request.operation == "transform") transform(context);
-            else if (request.capability.capability_id == "helper-ingress" && request.operation == "classify_event") classify(context);
+            else if (request.capability.capability_id == "helper-ingress" && request.operation == "classify_event") classify(context, observer);
+            else if (request.capability.capability_id == "lifecycle-events") observer.handle_observation(context);
+            else if (request.capability.capability_id == "lifecycle-correlation-lifetime") observer.handle_lifetime(context);
             else if (request.capability.capability_id == "interactive-resume") vibe::handle_resume(context);
             else vibe::handle_launcher(context);
         }

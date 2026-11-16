@@ -72,6 +72,8 @@ addon::Lifecycle_declaration lifecycle_declaration()
     declaration.features.root_turn_completion = addon::Feature_support::SUPPORTED;
     declaration.features.confirmed_phase_status = addon::Feature_support::SUPPORTED;
     declaration.features.attention = addon::Feature_support::SUPPORTED;
+    declaration.features.subagents = addon::Feature_support::SUPPORTED;
+    declaration.observation = addon::Observation_mode::CONTINUOUS;
     return declaration;
 }
 

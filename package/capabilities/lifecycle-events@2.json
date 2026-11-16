@@ -9,11 +9,11 @@
       "confirmed_phase_status": "supported",
       "attention": "supported",
       "paired_attention": "unsupported",
-      "subagents": "unsupported",
+      "subagents": "supported",
       "cooperative_description": "unsupported",
       "blockable_completion": "unsupported"
     },
     "turn_origin_correlation": "unsupported",
-    "observation": "events"
+    "observation": "continuous"
   }
 }

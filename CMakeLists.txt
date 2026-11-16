@@ -70,7 +70,8 @@ function(vibe_target target)
     endif()
 endfunction()
 
-add_library(vibe_provider STATIC src/vibe_launcher.cpp src/vibe_config.cpp src/vibe_events.cpp src/vibe_resume.cpp)
+add_library(vibe_provider STATIC src/vibe_launcher.cpp src/vibe_config.cpp src/vibe_events.cpp src/vibe_resume.cpp
+    src/vibe_store.cpp src/vibe_observer.cpp)
 target_include_directories(vibe_provider PUBLIC src)
 target_link_libraries(vibe_provider PUBLIC logonomic_cli_addon_sdk::sdk)
 vibe_target(vibe_provider)
@@ -111,6 +112,14 @@ add_test(NAME vibe_events_tests COMMAND vibe_events_tests
     "${CMAKE_CURRENT_SOURCE_DIR}/package/capabilities/lifecycle-events@2.json")
 add_executable(vibe_fake_cli tests/vibe_fake_cli.cpp)
 vibe_target(vibe_fake_cli)
+add_executable(vibe_store_tests tests/vibe_store_tests.cpp)
+target_link_libraries(vibe_store_tests PRIVATE vibe_provider)
+vibe_target(vibe_store_tests)
+add_test(NAME vibe_store_tests COMMAND vibe_store_tests)
+add_executable(vibe_observer_tests tests/vibe_observer_tests.cpp)
+target_link_libraries(vibe_observer_tests PRIVATE vibe_provider)
+vibe_target(vibe_observer_tests)
+add_test(NAME vibe_observer_tests COMMAND vibe_observer_tests)
 find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
 add_test(NAME vibe_hook_tests COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/vibe_hook_tests.py"
@@ -122,6 +131,6 @@ add_test(NAME vibe_package_validation COMMAND logonomic_cli_addon_validate
     "${VIBE_PACKAGE_DIRECTORY}" --platform "${VIBE_PLATFORM}")
 add_test(NAME vibe_package_conformance COMMAND logonomic_cli_addon_conformance
     "${VIBE_PACKAGE_DIRECTORY}")
-set_tests_properties(vibe_launcher_tests vibe_config_tests vibe_events_tests vibe_hook_tests
+set_tests_properties(vibe_launcher_tests vibe_config_tests vibe_events_tests vibe_store_tests vibe_observer_tests vibe_hook_tests
     vibe_protocol_tests vibe_package_validation vibe_package_conformance
     PROPERTIES TIMEOUT 60 LABELS "cli-addon;provider-contract")

@@ -51,6 +51,111 @@ def success(adapter, capability, version, operation, payload):
     return frame["payload"]
 
 
+def supports(adapter, capability, version):
+    return any(item["capability_id"] == capability and item["version"] == version
+               for item in adapter.capabilities_frame["capabilities"])
+
+
+def reserve_correlation(adapter, nonce):
+    if supports(adapter, "lifecycle-correlation-lifetime", 1):
+        success(adapter, "lifecycle-correlation-lifetime", 1, "reserve", {"transition_nonce": nonce})
+
+
+def observe_one_change(adapter, session, workspace, nonce, resume_cursor=""):
+    """Let the real SDK watch publish a page, then cancel its bounded window."""
+    adapter.sequence += 1
+    request_id = f"r{adapter.sequence}"
+    adapter.send({
+        "type": "invoke", "request_id": request_id,
+        "capability_id": "lifecycle-events", "version": 2,
+        "operation": "observe", "deadline_ms": 65000,
+        "payload": {
+            "session": {"working_directory": str(workspace), "launcher_argv": ["vibe"],
+                        "provider_session_id": session},
+            "resume_cursor": resume_cursor, "window_ms": 60000,
+            "correlation": {"version": 1, "transition_nonce": nonce},
+        },
+    })
+    cancelled = False
+    for _ in range(32):
+        frame = adapter.receive(timeout=10)
+        require(frame.get("request_id") == request_id, frame)
+        if frame["type"] == "progress" and not cancelled:
+            adapter.send({"type": "cancel", "request_id": request_id})
+            cancelled = True
+        elif frame["type"] == "result":
+            require(cancelled and frame["status"] == "success", frame)
+            return frame["payload"]["resume_cursor"]
+    raise AssertionError("Observer did not complete its cancelled window")
+
+
+def qualify_native_observer(adapter, root, workspace, start_event, snapshots, child_turn_id):
+    """Replay real native generations through the packaged watcher and SDK lane.
+
+    Only these copied stores are changed. The actual Vibe conversation and its
+    private app-server connection remain untouched.
+    """
+    if not supports(adapter, "lifecycle-correlation-lifetime", 1):
+        return None
+    session_id = start_event["body"]["session_id"]
+    replay = root / "observer-replay" / "unified" / session_id
+    shutil.copytree(snapshots["child-running"], replay)
+    nonce = "3" * 32
+    reserve_correlation(adapter, nonce)
+    event = json.loads(json.dumps(start_event))
+    event["body"]["transcript_path"] = str(replay)
+    success(adapter, "helper-ingress", 2, "classify_event", {
+        "event": event, "ledger": {"current_epoch": 0, "current_transition": None},
+        "transition_nonce": nonce,
+    })
+    watch_cursor = observe_one_change(adapter, session_id, workspace, nonce)
+    correlation = {"version": 1, "transition_nonce": nonce}
+    first = success(adapter, "lifecycle-events", 2, "poll_observations", {
+        "resume_cursor": "", "limit": 16, "correlation": correlation,
+    })
+    require(len(first["observations"]) == 1, first)
+    started = first["observations"][0]
+    require(started["subagent_transition"] == "started" and started["agent_id"] == child_turn_id, started)
+    acknowledged = success(adapter, "lifecycle-events", 2, "poll_observations", {
+        "resume_cursor": first["resume_cursor"], "limit": 16, "correlation": correlation,
+    })
+    require(not acknowledged["observations"], acknowledged)
+
+    # Publishing the captured completed generation is the same immutable
+    # CURRENT replacement the native writer made during the actual turn.
+    shutil.copytree(snapshots["child-settled"], replay, dirs_exist_ok=True,
+                    ignore=lambda _directory, names: ["CURRENT"] if "CURRENT" in names else [])
+    replacement = replay / "CURRENT.next"
+    replacement.write_bytes((snapshots["child-settled"] / "CURRENT").read_bytes())
+    replacement.replace(replay / "CURRENT")
+    observe_one_change(adapter, session_id, workspace, nonce, watch_cursor)
+    query = {"resume_cursor": first["resume_cursor"], "limit": 16, "correlation": correlation}
+    last = success(adapter, "lifecycle-events", 2, "poll_observations", query)
+    repeated = success(adapter, "lifecycle-events", 2, "poll_observations", query)
+    require(last == repeated, "Repeated observer page was not replayable before acknowledgement")
+    require(len(last["observations"]) == 1, last)
+    stopped = last["observations"][0]
+    require(stopped["subagent_transition"] == "stopped" and stopped["agent_id"] == child_turn_id
+            and stopped["provider_event_name"] == "vibe_subagent_idle", stopped)
+    for observation in (started, stopped):
+        require(observation["provider_session_id"] == session_id and observation["provider_turn_id"] == "",
+                "Child activity was attributed to a root turn")
+        require(all(observation[key] == "none" for key in (
+            "session_transition", "phase_transition", "outcome_transition", "attention_transition")),
+            "Child activity mutated the root lifecycle")
+    empty = success(adapter, "lifecycle-events", 2, "poll_observations", {
+        "resume_cursor": last["resume_cursor"], "limit": 16, "correlation": correlation,
+    })
+    require(not empty["observations"] and not empty["more"], empty)
+    success(adapter, "lifecycle-correlation-lifetime", 1, "retire", {
+        "transition_nonce": nonce, "disposition": "abandoned",
+    })
+    result = {"real_native_generation_replay": True, "child_run_id": child_turn_id,
+              "observed_states": ["running", "idle"], "retry_and_acknowledgement": True}
+    write_json(root / "observer-qualification.json", result)
+    return result
+
+
 def file_hashes(directory):
     return {
         str(path.relative_to(directory)): hashlib.sha256(path.read_bytes()).hexdigest()
@@ -251,6 +356,9 @@ def run(arguments):
         for delivery in events:
             require((deliveries / (delivery["idempotency_key"] + ".ack")).is_file(),
                     f"Delivery was not acknowledged: {delivery['event']['name']}")
+        observer_result = qualify_native_observer(
+            adapter, root, workspace, starts[0]["event"], snapshots, outcome["turn_id"])
+        reserve_correlation(adapter, "2" * 32)
         classification = success(adapter, "helper-ingress", 2, "classify_event", {
             "event": starts[0]["event"],
             "ledger": {"current_epoch": 0, "current_transition": None},
@@ -304,6 +412,7 @@ def run(arguments):
             "child_turn_id": outcome["turn_id"], "child_states": ["running", "idle"],
             "model_requests": len(server.requests), "resume_availability": inspected["availability"],
             "interactive_exact_resume": True, "native_store": str(session),
+            "subagent_observer": observer_result,
         }
         write_json(root / "result.json", summary)
         print(json.dumps(summary, indent=2))
