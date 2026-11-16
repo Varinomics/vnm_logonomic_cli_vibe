@@ -1,0 +1,5 @@
+{
+  "capability_id": "conversation-export",
+  "version": 2,
+  "payload": {"environment_names": ["VIBE_HOME"]}
+}

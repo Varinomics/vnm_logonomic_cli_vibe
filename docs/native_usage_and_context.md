@@ -123,3 +123,41 @@ omit earlier successful-compaction entries, so the provider does not assert
 complete lifetime compaction history. The SDK host retains that lower bound but
 hides an incomplete count. The provider uses this single absolute-history
 authority and does not also emit the same compactions as incremental events.
+
+## Conversation export
+
+The conversation-export capability uses version 2, requiring the VIBE_HOME
+source fact prepared for the original launch or resume. An export requires the
+exact retained provider session ID and resume locator from that source. The
+locator's home must match the frozen environment; no current launcher account,
+nearest session, abbreviated ID, or terminal scrollback substitutes for it.
+Export does not depend on whether the CLI can resume the conversation, or on
+whether its original working directory still exists.
+
+The shared SDK writer renders the verified public projection as plain text,
+Markdown, or highlighted conversation text. Native history/chunk order is
+preserved. Identical duplicate entry IDs are suppressed; conflicting duplicates
+fail. Text retains Unicode and formatting. Full exports distinguish tool
+arguments, tool results, native failures, reasoning, notices, checkpoints, and
+answered user questions. Typed image/audio/blob attachments become explicit
+markers; referenced files and URLs are not read or fetched. Embedded resource
+text already present in the snapshot is retained.
+
+Compact exports keep user discussion, question responses, and assistant text
+whose final/commentary phase the source does not establish. They omit known
+tool activity, reasoning, notices, approval records, and discarded provisional
+assistant content. Full export labels that discarded content as discarded
+rather than presenting it as an accepted final answer.
+
+A purely unfinished history tail can be omitted with the SDK's explicit
+incomplete-tail result flag. Interleaved completed discussion after unsettled
+entries fails instead of being silently dropped. A pending recovery journal
+also makes export temporarily unavailable: the published generation can lag
+whole completed turns, so it cannot be passed off as a complete current export
+or continuation source. Unknown entry/content kinds fail explicitly.
+
+The writer publishes exactly one fixed-name artifact only after success, and
+removes its own partial artifact after failure or cancellation. No native
+history is modified. The provider's bounded native document reader reports
+capacity failure explicitly; it does not truncate a successful export to an
+IPC payload size.
