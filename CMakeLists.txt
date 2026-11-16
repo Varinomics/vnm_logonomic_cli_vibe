@@ -71,7 +71,8 @@ function(vibe_target target)
 endfunction()
 
 add_library(vibe_provider STATIC src/vibe_launcher.cpp src/vibe_config.cpp src/vibe_events.cpp src/vibe_resume.cpp
-    src/vibe_store.cpp src/vibe_observer.cpp src/vibe_context.cpp src/vibe_usage.cpp src/vibe_export.cpp)
+    src/vibe_store.cpp src/vibe_observer.cpp src/vibe_context.cpp src/vibe_usage.cpp src/vibe_export.cpp
+    src/vibe_tasks.cpp)
 target_include_directories(vibe_provider PUBLIC src)
 target_link_libraries(vibe_provider PUBLIC logonomic_cli_addon_sdk::sdk)
 vibe_target(vibe_provider)
@@ -132,6 +133,10 @@ add_executable(vibe_export_tests tests/vibe_export_tests.cpp)
 target_link_libraries(vibe_export_tests PRIVATE vibe_provider)
 vibe_target(vibe_export_tests)
 add_test(NAME vibe_export_tests COMMAND vibe_export_tests)
+add_executable(vibe_task_tests tests/vibe_task_tests.cpp)
+target_link_libraries(vibe_task_tests PRIVATE vibe_provider)
+vibe_target(vibe_task_tests)
+add_test(NAME vibe_task_tests COMMAND vibe_task_tests "$<TARGET_FILE:vibe_fake_cli>")
 add_executable(vibe_observer_tests tests/vibe_observer_tests.cpp)
 target_link_libraries(vibe_observer_tests PRIVATE vibe_provider)
 vibe_target(vibe_observer_tests)
@@ -147,6 +152,6 @@ add_test(NAME vibe_package_validation COMMAND logonomic_cli_addon_validate
     "${VIBE_PACKAGE_DIRECTORY}" --platform "${VIBE_PLATFORM}")
 add_test(NAME vibe_package_conformance COMMAND logonomic_cli_addon_conformance
     "${VIBE_PACKAGE_DIRECTORY}")
-set_tests_properties(vibe_launcher_tests vibe_config_tests vibe_events_tests vibe_store_tests vibe_projection_tests vibe_context_tests vibe_usage_tests vibe_export_tests vibe_observer_tests vibe_hook_tests
+set_tests_properties(vibe_launcher_tests vibe_config_tests vibe_events_tests vibe_store_tests vibe_projection_tests vibe_context_tests vibe_usage_tests vibe_export_tests vibe_task_tests vibe_observer_tests vibe_hook_tests
     vibe_protocol_tests vibe_package_validation vibe_package_conformance
     PROPERTIES TIMEOUT 60 LABELS "cli-addon;provider-contract")

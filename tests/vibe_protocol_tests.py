@@ -335,11 +335,48 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn(("launch-preparation", 3), advertised)
 
     def test_unknown_operations_preserve_the_session(self):
-        for capability, version in (("launcher-discovery", 1), ("org.example.unknown", 1)):
+        for capability, version in (("launcher-discovery", 1), ("structured-session", 3),
+                                    ("org.example.unknown", 1)):
             response = self.adapter.invoke(capability, version, "unknown_operation", {})
             self.assertEqual(response["status"], "unavailable", response)
             self.assertEqual(response["reason"], "unknown_operation", response)
         self.assertTrue(self.recognize("vibe")["recognized"])
+
+    def test_structured_implementation_admission(self):
+        declaration = json.loads((PACKAGE / "capabilities" / "structured-session@3.json").read_text("utf-8"))
+        self.assertEqual(declaration["payload"]["purposes"], ["implementation"])
+        executable, environment = self.installed_cli()
+        environment["MISTRAL_API_KEY"] = "dummy-structured-probe-key"
+        request = self.preparation_request(executable, environment)
+        request.pop("title_instruction")
+        request["launcher"]["script_body"] = f'"{executable}" --agent ask'
+        request["launcher_argv"] = [str(executable), "--agent", "ask"]
+        prompt = 'Implement the requested change with "quotes" and λ.\nKeep $(literal) text.'
+        request.update(purpose="read_only_review", prompt_base64=base64.b64encode(prompt.encode("utf-8")).decode("ascii"))
+
+        refused = self.adapter.invoke("structured-session", 3, "prepare", request)
+        self.assertEqual(refused["status"], "unavailable", refused)
+        self.assertEqual(refused["reason"], "purpose_unavailable", refused)
+
+        request["purpose"] = "implementation"
+        result = self.success("structured-session", 3, "prepare", request)
+        self.assertEqual(result["profile_storage"], request["profile_storage"])
+        process = result["process"]
+        self.assertEqual(process["executable"], {"launcher_program": True})
+        self.assertEqual(process["argv"], ["--agent", "ask", "--output", "streaming", "-p"])
+        self.assertEqual(process["working_directory"], "session_workspace")
+        self.assertEqual(process["start"], "attached")
+        self.assertEqual(process["stdin"], "payload")
+        self.assertEqual(process["stdin_payload"], prompt)
+        self.assertEqual(process["environment"]["VNM_VIBE_HOOK"], "")
+        self.assertNotIn("MISTRAL_API_KEY", process["environment"])
+        self.assertTrue(result["inspection"]["incremental"])
+        self.assertFalse(result["inspection"]["keep_stdin_open"])
+        state = b"".join(base64.b64decode(chunk, validate=True)
+                         for chunk in result["inspection"]["protocol_state_base64_chunks"])
+        self.assertNotIn(environment["MISTRAL_API_KEY"].encode(), state)
+        self.assertNotIn(prompt.encode(), state)
+        self.assertFalse((executable.parent / "unexpected-launch.txt").exists())
 
     def test_usage_storage_and_session_admission(self):
         executable, environment = self.installed_cli()
