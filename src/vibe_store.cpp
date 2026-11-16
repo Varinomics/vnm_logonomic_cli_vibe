@@ -254,9 +254,22 @@ Native_store_result read_native_snapshot(const fs::path& transcript, std::string
     result.current_sha256 = current_digest;
     const auto* metadata = runtime->find("session_metadata");
     const auto* model = metadata ? metadata->find("active_model") : nullptr;
-    if (model && !model->is_null()) {
-        if (!model->is_string() || !bounded_text(model->as_string(), 256)) return failure("vibe_store_model_invalid");
+    // An empty pin means "follow default". The effective alias is written at
+    // the next native turn; optional model evidence never invalidates children.
+    if (model && model->is_string() && bounded_text(model->as_string(), 256)) {
         result.selected_model_alias = model->as_string();
+    }
+    if (const auto* cwd = metadata ? text(*metadata, "cwd") : nullptr;
+        cwd && bounded_text(*cwd, 32768) && addon::path_from_utf8(*cwd).is_absolute())
+    {
+        result.working_directory = *cwd;
+    }
+    const auto* settings = runtime->find("core_settings");
+    const auto* context = settings ? settings->find("context") : nullptr;
+    const auto* facts = context ? context->find("model_facts") : nullptr;
+    const auto window = facts ? number(*facts, "context_window") : std::nullopt;
+    if (window && *window > 0 && *window <= 9007199254740991ULL) {
+        result.context_window = window;
     }
     const auto* subagents = runtime->find("subagents");
     if (subagents && !subagents->is_null()) {
@@ -278,6 +291,131 @@ Native_store_result read_native_snapshot(const fs::path& transcript, std::string
     const auto after = document(transcript / "CURRENT", k_pointer_bytes);
     if (!after || *after != *current_bytes) return failure("vibe_store_generation_changed");
     return {std::move(result), false, {}};
+}
+
+Native_projection_result read_native_projection(
+    const fs::path& transcript, const Native_snapshot& snapshot, bool include_history)
+{
+    const auto unavailable = [](std::string reason) {
+        return Native_projection_result{std::nullopt, false, std::move(reason)};
+    };
+    if (!identifier(snapshot.identity.session_id) || !transcript.is_absolute() ||
+        transcript.lexically_normal() != transcript ||
+        transcript.filename() != addon::path_from_utf8(snapshot.identity.session_id) ||
+        transcript.parent_path().filename() != "unified")
+    {
+        return unavailable("vibe_store_identity_invalid");
+    }
+    const auto current_bytes = document(transcript / "CURRENT", k_pointer_bytes);
+    if (!current_bytes || addon::to_hex(addon::Sha256::digest(*current_bytes)) != snapshot.current_sha256) {
+        return unavailable("vibe_store_generation_changed");
+    }
+    const auto current = parse(*current_bytes, k_pointer_bytes);
+    const auto* manifest_digest = current ? text(*current, "manifest_sha256") : nullptr;
+    if (!current || !manifest_digest || !same(*current, "generation", snapshot.generation) ||
+        !same(*current, "session_id", snapshot.identity.session_id))
+    {
+        return unavailable("vibe_store_current_invalid");
+    }
+    const auto directory = transcript / "generations" / snapshot.generation;
+    if (!regular_directory(directory)) {
+        return unavailable("vibe_store_generation_unavailable");
+    }
+    const auto manifest_bytes = document(directory / "manifest.json", k_manifest_bytes);
+    if (!manifest_bytes || addon::to_hex(addon::Sha256::digest(*manifest_bytes)) != *manifest_digest) {
+        return unavailable("vibe_store_manifest_invalid");
+    }
+    const auto manifest = parse(*manifest_bytes, k_manifest_bytes);
+    if (!manifest || !same(*manifest, "session_id", snapshot.identity.session_id) ||
+        !same(*manifest, "generation", snapshot.generation) ||
+        number(*manifest, "snapshot_sequence") != snapshot.snapshot_sequence)
+    {
+        return unavailable("vibe_store_manifest_invalid");
+    }
+    const auto* descriptor = manifest->find("projection_state");
+    const auto* path = descriptor ? text(*descriptor, "path") : nullptr;
+    const auto* digest = descriptor ? text(*descriptor, "sha256") : nullptr;
+    if (!path || !filename(*path) || !digest || !addon::sha256_from_hex(*digest)) {
+        return unavailable("vibe_store_projection_descriptor_invalid");
+    }
+    const auto bytes = document(directory / addon::path_from_utf8(*path), k_document_bytes);
+    if (!bytes || addon::to_hex(addon::Sha256::digest(*bytes)) != *digest) {
+        return unavailable("vibe_store_projection_invalid");
+    }
+    auto projection = parse(*bytes, k_document_bytes);
+    if (!projection || number(*projection, "projection_state_version") != 1 ||
+        !same(*projection, "session_id", snapshot.identity.session_id) ||
+        number(*projection, "snapshot_sequence") != snapshot.snapshot_sequence)
+    {
+        return unavailable("vibe_store_projection_invalid");
+    }
+    auto* state = projection->find("snapshot");
+    const auto* session = state ? state->find("session") : nullptr;
+    if (!state || !same(*state, "format", "harness.public-session-state/v1") ||
+        !session || !same(*session, "id", snapshot.identity.session_id))
+    {
+        return unavailable("vibe_store_projection_identity_invalid");
+    }
+    if (include_history) {
+        auto* history = state->find("history");
+        auto* entries = history ? history->find("entries") : nullptr;
+        if (!entries || !entries->is_array()) {
+            return unavailable("vibe_store_projection_history_invalid");
+        }
+        const auto* chunks = descriptor->find("chunks");
+        if (chunks && !chunks->is_null()) {
+            if (!chunks->is_array() || !entries->as_array().empty() ||
+                !regular_directory(transcript / "chunks"))
+            {
+                return unavailable("vibe_store_projection_chunks_invalid");
+            }
+            std::size_t total_bytes = bytes->size();
+            for (const auto& chunk : chunks->as_array()) {
+                if (!chunk.is_string() || !addon::sha256_from_hex(chunk.as_string())) {
+                    return unavailable("vibe_store_projection_chunks_invalid");
+                }
+                const auto chunk_bytes = document(
+                    transcript / "chunks" / (chunk.as_string() + ".json"), k_document_bytes);
+                if (!chunk_bytes || total_bytes > k_document_bytes - chunk_bytes->size() ||
+                    addon::to_hex(addon::Sha256::digest(*chunk_bytes)) != chunk.as_string())
+                {
+                    return unavailable("vibe_store_projection_chunk_invalid");
+                }
+                total_bytes += chunk_bytes->size();
+                auto parsed = parse(*chunk_bytes, k_document_bytes);
+                if (!parsed || !parsed->is_array()) {
+                    return unavailable("vibe_store_projection_chunk_invalid");
+                }
+                for (auto& entry : parsed->as_array()) {
+                    entries->push_back(std::move(entry));
+                }
+            }
+        }
+    }
+    const auto* journal = manifest->find("recovery_journal_segment");
+    const auto* journal_path = journal ? text(*journal, "path") : nullptr;
+    const auto first = journal ? number(*journal, "first_sequence") : std::nullopt;
+    if (!journal_path || !first || *first != snapshot.snapshot_sequence + 1 ||
+        !journal_path->starts_with("journal/") || !filename(std::string_view(*journal_path).substr(8)))
+    {
+        return unavailable("vibe_store_journal_descriptor_invalid");
+    }
+    std::error_code error;
+    const auto journal_file = transcript / addon::path_from_utf8(*journal_path);
+    if (!regular_directory(transcript / "journal") ||
+        !fs::is_regular_file(fs::symlink_status(journal_file, error)) || error)
+    {
+        return unavailable("vibe_store_journal_unavailable");
+    }
+    const auto journal_bytes = fs::file_size(journal_file, error);
+    if (error) {
+        return unavailable("vibe_store_journal_unavailable");
+    }
+    const auto after = document(transcript / "CURRENT", k_pointer_bytes);
+    if (!after || *after != *current_bytes) {
+        return unavailable("vibe_store_generation_changed");
+    }
+    return {std::move(projection), journal_bytes != 0, {}};
 }
 
 bool native_child_active(Native_child_state state)
