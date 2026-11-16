@@ -309,6 +309,7 @@ struct Observer::Impl {
         }
         addon::Observe_result result;
         result.model_failure = request->model_failure;
+        result.execution_failure = request->execution_failure;
         {
             std::lock_guard lock(mutex);
             result.resume_cursor = cursor(nonce, 'w', binding->produced);
@@ -332,6 +333,7 @@ struct Observer::Impl {
         }
         addon::Poll_observations_result result;
         result.model_failure = request->model_failure;
+        result.execution_failure = request->execution_failure;
         std::string error;
         const auto nonce = request->correlation->transition_nonce;
         {

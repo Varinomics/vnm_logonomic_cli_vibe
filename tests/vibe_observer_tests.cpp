@@ -107,6 +107,43 @@ void bind(vibe::Observer& observer, const Store_fixture& store)
         "bound nonce was moved to another session");
 }
 
+void optional_execution_context_failures()
+{
+    Store_fixture store;
+    auto state = runtime();
+    set_child(state, child());
+    store.publish(state);
+    vibe::Observer observer;
+    bind(observer, store);
+    auto baseline_watch = observation(store);
+    observer.handle_observation(baseline_watch);
+    require(baseline_watch.success, "baseline watch failed");
+    const auto baseline_poll = poll(observer);
+    require(baseline_poll.success && page(baseline_poll).observations.size() == 1,
+        "baseline child observation was not queued");
+    const auto failure = json(R"({"version":1,"failure":{"reason_code":"unsupported_version","detail":"execution_context request is malformed or its version is unsupported"}})");
+    for (const auto& invalid : {json(R"({"version":99})"), json(R"("malformed")")}) {
+        auto watch = observation(store);
+        watch.input.payload.set("execution_context", invalid);
+        observer.handle_observation(watch);
+        auto expected_watch = baseline_watch.output;
+        expected_watch.set("execution_context", failure);
+        require(watch.success && watch.output == expected_watch,
+            "optional execution-context failure was lost or changed the watch cursor");
+
+        // Replay the same unacknowledged page with an invalid optional request.
+        // The lifecycle payload and cursor must remain byte-for-byte equivalent.
+        Invocation replay;
+        replay.input = baseline_poll.input;
+        replay.input.payload.set("execution_context", invalid);
+        observer.handle_observation(replay);
+        auto expected_poll = baseline_poll.output;
+        expected_poll.set("execution_context", failure);
+        require(replay.success && replay.output == expected_poll,
+            "optional execution-context failure was lost or changed the lifecycle page");
+    }
+}
+
 void child_runs_and_cursors()
 {
     Store_fixture store;
@@ -359,6 +396,7 @@ int main()
         labels();
         fast_runs_and_regression();
         selected_model_changes();
+        optional_execution_context_failures();
         std::cout << "Vibe continuous observer tests passed\n";
         return 0;
     }
