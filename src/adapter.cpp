@@ -1,6 +1,7 @@
 #include "vibe_launcher.h"
 #include "vibe_config.h"
 #include "vibe_events.h"
+#include "vibe_export.h"
 #include "vibe_observer.h"
 #include "vibe_resume.h"
 #include "vibe_usage.h"
@@ -90,6 +91,7 @@ int main()
         {"execution-context", 1}, {"model-context-delivery", 2},
         {"context-state", 2},
         {"profile-storage", 1}, {"usage-scan", 3}, {"usage-session", 1}, {"usage-temporal", 1},
+        {"conversation-export", 2},
         {"interactive-resume", 2}, {"interactive-resume", 3},
     };
     addon::Adapter_runtime runtime(std::move(options));
@@ -104,6 +106,7 @@ int main()
             else if (request.capability.capability_id == "interactive-resume") vibe::handle_resume(context);
             else if (request.capability.capability_id == "usage-scan") vibe::handle_usage_scan(context);
             else if (request.capability.capability_id == "usage-session") vibe::handle_usage_session(context);
+            else if (request.capability.capability_id == "conversation-export") vibe::handle_export(context);
             else if (request.capability.capability_id == "profile-storage" &&
                 request.operation == addon::k_profile_storage_acknowledge) addon::acknowledge_profile_storage(context);
             else vibe::handle_launcher(context);

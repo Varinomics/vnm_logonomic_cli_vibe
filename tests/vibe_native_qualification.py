@@ -202,6 +202,123 @@ def runtime_state(session):
     return json.loads(runtime_bytes)
 
 
+def public_state(session):
+    pointer = json.loads((session / "CURRENT").read_text("utf-8"))
+    generation = session / "generations" / pointer["generation"]
+    manifest = json.loads((generation / "manifest.json").read_text("utf-8"))
+    descriptor = manifest["projection_state"]
+    encoded = (generation / descriptor["path"]).read_bytes().rstrip(b"\n")
+    require(hashlib.sha256(encoded).hexdigest() == descriptor["sha256"],
+            "Native public-projection digest disagrees")
+    state = json.loads(encoded)["snapshot"]
+    for digest in descriptor.get("chunks", []):
+        chunk = (session / "chunks" / (digest + ".json")).read_bytes().rstrip(b"\n")
+        require(hashlib.sha256(chunk).hexdigest() == digest, "Native history-chunk digest disagrees")
+        state["history"]["entries"].extend(json.loads(chunk))
+    return state
+
+
+def qualify_native_accounting(adapter, preparation, record, stage, previous=None):
+    session = Path(record["transcript_path"])
+    before = file_hashes(Path(record["vibe_home"]))
+    native = public_state(session)
+    classification = success(adapter, "helper-ingress", 2, "classify_event", {
+        "event": {"name": "pre_agent", "body": {"session_id": session.name}},
+        "ledger": {"current_epoch": 1, "current_transition": {
+            "kind": "start", "provider_session_id": session.name, "nonce": "2" * 32}},
+        "transition_nonce": "4" * 32, "context_state_version": 2, "context_snapshot_revision": 41,
+    })
+    require("context_failure" not in classification, classification)
+    updates = classification["context_updates"]
+    require(len(updates) == 1 and updates[0]["provider_session_id"] == session.name and
+            updates[0]["used_tokens"] == native["session"]["contextUsage"]["totalTokens"] and
+            updates[0]["compaction_count_revision"] == 41 and
+            not updates[0].get("compaction_count_complete", False),
+            "Context carrier confused cumulative usage, source identity, or history authority")
+    capacity = runtime_state(session)["core_settings"]["context"]["model_facts"]["context_window"]
+    require(updates[0]["context_window"] == capacity, "Native model context capacity was lost")
+    poll = success(adapter, "lifecycle-events", 2, "poll_observations", {
+        "resume_cursor": "", "limit": 16,
+        "correlation": {"version": 1, "transition_nonce": "2" * 32}, "context_state_version": 2,
+    })
+    require(poll["context_updates"][0]["used_tokens"] == updates[0]["used_tokens"] and
+            "compaction_count_revision" not in poll["context_updates"][0],
+            "Continuous context reader acquired absolute-history sampling authority")
+    request = {key: value for key, value in preparation.items() if key != "title_instruction"}
+    candidate = Path(request["profile_storage"]["root"]) / ("usage-" + stage)
+    candidate.mkdir()
+    request.update({"mode": "incremental", "snapshot_id": None, "cursor": None,
+                    "cache_selection": {"version": 1, "accepted": previous, "candidate_root": str(candidate)}})
+    usage = success(adapter, "usage-scan", 3, "scan", request)
+    require(usage["complete"] and usage["incomplete_historical_coverage"] and
+            usage["profile_storage"] == request["profile_storage"], usage)
+    records = {item["session_key"]: item for item in usage["records"]}
+    for path in session.parent.iterdir():
+        if not path.is_dir() or not (path / "CURRENT").is_file():
+            continue
+        counts = public_state(path)["session"].get("tokenUsage")
+        if counts is None:
+            continue
+        item = records[path.name]
+        require(item["total_tokens"] == counts["totalTokens"] and
+                item["input"]["value"] == counts["inputTokens"] and
+                item["output"]["value"] == counts["outputTokens"] and
+                item["semantics"] == "cumulative-final" and "model" not in item,
+                "Usage scan changed native cumulative counters or attributed a selected model to billing")
+        require(item["cache_read"]["coverage"]["support"] == "unknown" and
+                item["cache_creation"]["coverage"]["support"] == "unknown",
+                "Native normalized cache counters became invented complete cache measurements")
+    identities = [{"record_id": item["record_id"], "session_key": item["session_key"]}
+                  for item in usage["records"]]
+    described = success(adapter, "usage-session", 1, "describe", {"records": identities})
+    require(all(item["session"] == {"version": 1, "provider_session_id": item["session_key"],
+                                   "excludes_turn_in_flight": False} for item in described["records"]),
+            "Native usage aliases or completed-turn coverage were fabricated")
+    require(file_hashes(Path(record["vibe_home"])) == before, "Context or usage read modified native history")
+    write_json(candidate.parent / ("usage-" + stage + ".json"), usage)
+    return {"context": updates[0], "usage": usage, "records": records}
+
+
+def qualify_native_export(adapter, root, preparation, record):
+    before = file_hashes(Path(record["vibe_home"]))
+    structured_results = [json.dumps(entry["state"]["output"]["structured_content"],
+                                     sort_keys=True, separators=(",", ":"))
+                          for entry in public_state(Path(record["transcript_path"]))["history"]["entries"]
+                          if entry["type"] == "effect" and
+                          entry.get("state", {}).get("output", {}).get("structured_content") is not None]
+    require(structured_results, "The native fixture did not exercise structured tool output")
+    descriptors = []
+    for format_name in ("text", "markdown", "conversation"):
+        for compact in (False, True):
+            output = root / ("conversation-" + format_name + ("-compact" if compact else "-full"))
+            output.mkdir()
+            result = success(adapter, "conversation-export", 2, "export", {
+                "provider_session_id": record["provider_session_id"], "resume_record": record,
+                "working_directory": preparation["working_directory"],
+                "launch_environment": preparation["launch_environment"],
+                "output_directory": str(output), "format": format_name, "compact": compact,
+                "profile_storage": preparation["profile_storage"],
+            })
+            artifact = output / result["file_name"]
+            text = artifact.read_text("utf-8")
+            require(RESUME_PROMPT in text and RESUME_ANSWER in text and "Delegate exploration" in text,
+                    "Export omitted accepted user discussion or the resumed answer")
+            require(TITLE_GUIDANCE not in text, "Export exposed private startup/resume hook context")
+            if not compact:
+                require(all(result in text for result in structured_results),
+                        "Full export dropped a native structured tool result")
+            require(result["bytes"] == artifact.stat().st_size and result["message_count"] > 0 and
+                    not result["incomplete_tail_omitted"] and result.get("compact", False) == compact and
+                    result["profile_storage"] == preparation["profile_storage"],
+                    "Export descriptor did not match the completed native history or artifact")
+            descriptors.append(result)
+    require(file_hashes(Path(record["vibe_home"])) == before, "Conversation export changed native history")
+    return {"formats": ["text", "markdown", "conversation"], "compact_variants": True,
+            "hidden_hook_context_excluded": True, "accepted_discussion_preserved": True,
+            "structured_tool_results_preserved": True,
+            "artifacts": descriptors}
+
+
 def create_host_fixture(path, deliveries):
     # A fresh process handles each SDK delivery; separate files keep concurrent
     # child/root observations intact without a shared append protocol.
@@ -391,6 +508,7 @@ def run(arguments):
         record = next(observation["resume_record"] for observation in classification["observations"]
                       if "resume_record" in observation)
         session = Path(record["transcript_path"])
+        initial_accounting = qualify_native_accounting(adapter, preparation, record, "before-resume")
         before_inspection = file_hashes(native_home)
         resume_request = dict(preparation, resume={"version": 1, "record": record})
         inspection_request = {key: value for key, value in resume_request.items() if key != "title_instruction"}
@@ -431,6 +549,13 @@ def run(arguments):
         require(all(value == "Bearer fake-key" for value in server.authorizations),
                 "A scripted model request did not use the test-owned dummy key")
         snapshots["resumed"] = capture_generation(session, root / "snapshots" / "resumed")
+        accounting = qualify_native_accounting(adapter, preparation, record, "after-resume",
+                                               initial_accounting["usage"]["cache_candidate"])
+        require(set(accounting["records"]) == set(initial_accounting["records"]) and
+                accounting["records"][session.name]["total_tokens"] >
+                initial_accounting["records"][session.name]["total_tokens"],
+                "Exact resume duplicated usage identity or lost the new native completion")
+        exported = qualify_native_export(adapter, root, preparation, record)
         version = subprocess.run([str(vibe), "--version"], env=environment, cwd=workspace,
                                  capture_output=True, text=True, timeout=10)
         summary = {
@@ -443,6 +568,12 @@ def run(arguments):
             "native_model_report": models[0],
             "native_execution_directory": directories[0],
             "model_context_transport": "verified; scripted model does not establish instruction compliance",
+            "native_context": accounting["context"],
+            "native_usage": {"session_totals": {key: item["total_tokens"]
+                                                for key, item in accounting["records"].items()},
+                             "stable_resume_identity": True, "selected_cache_reused": True,
+                             "per_model_attribution": "unavailable", "cache_coverage": "unknown"},
+            "native_export": exported,
         }
         write_json(root / "result.json", summary)
         print(json.dumps(summary, indent=2))
