@@ -42,7 +42,9 @@ The scanner discovers these history locations from the frozen request:
 
 Each location contributes its `unified/<session_id>` directories. The same
 native session found at multiple locations is counted once when its evidence
-agrees; conflicting copies fail the scan. Other project, agent, and managed
+agrees; conflicting copies fail the scan, including a copy whose native counters
+are still unavailable. This decision does not depend on directory ordering.
+Other project, agent, and managed
 configuration roots, legacy logs, deleted unobserved sessions, and unsaved
 sessions are outside this discovery scope. The result therefore always declares
 incomplete historical coverage. It does not claim selected-account attribution.
@@ -138,16 +140,18 @@ The shared SDK writer renders the verified public projection as plain text,
 Markdown, or highlighted conversation text. Native history/chunk order is
 preserved. Identical duplicate entry IDs are suppressed; conflicting duplicates
 fail. Text retains Unicode and formatting. Full exports distinguish tool
-arguments, tool results, native failures, reasoning, notices, checkpoints, and
+arguments, textual and structured tool results, native failures, reasoning, notices, checkpoints, and
 answered user questions. Typed image/audio/blob attachments become explicit
 markers; referenced files and URLs are not read or fetched. Embedded resource
 text already present in the snapshot is retained.
 
-Compact exports keep user discussion, question responses, and assistant text
+Compact exports keep user discussion, including a prompt whose native turn was
+skipped, question responses, and assistant text
 whose final/commentary phase the source does not establish. They omit known
 tool activity, reasoning, notices, approval records, and discarded provisional
-assistant content. Full export labels that discarded content as discarded
-rather than presenting it as an accepted final answer.
+assistant content. Full export labels discarded assistant text and reasoning
+with their native cause. A skipped user prompt remains user discussion and is
+labeled as skipped in both projections.
 
 A purely unfinished history tail can be omitted with the SDK's explicit
 incomplete-tail result flag. Interleaved completed discussion after unsettled
