@@ -165,3 +165,123 @@ removes its own partial artifact after failure or cancellation. No native
 history is modified. The provider's bounded native document reader reports
 capacity failure explicitly; it does not truncate a successful export to an
 IPC payload size.
+
+## Remaining features and implementation routes
+
+The interfaces below exist in the pinned native source. Their existence does
+not mean this package has adopted them. The current interactive integration
+owns native hooks and an authenticated store observer, not the interactive
+client's app-server connection.
+
+### Live session attachment
+
+The native [app-server protocol](https://github.com/mistralai/mistral-vibe/blob/b20313e01d6926d4191da89c32d5da11e3a0a060/docs/reference/app-server-protocol.md)
+opens a root through `session/start`, `session/resume`, or `session/continue`,
+then supplies an atomic snapshot and attached event stream. One AppServer owns
+one attached root and its children. The protocol explicitly does not promise
+multiple simultaneous observers of the same Runtime. Starting another server
+or resuming the same stored ID there does not attach to the already running CLI.
+
+A live integration therefore needs a supported connection to that same Runtime,
+or a launch route which owns and forwards the CLI's existing connection. It
+must adopt native identity handoffs and watermarks, recover gaps with the native
+snapshot protocol, and keep Logonomic activation attribution captured before
+asynchronous delivery. The existing store observer cannot grant that control.
+
+### Root outcomes and paired attention
+
+The persisted public projection does contain `snapshot.latestTurn`, with a
+native turn ID and completed, failed, or interrupted state. This is a useful
+route for a bounded future observer of sampled terminal turns. It requires a
+historical baseline, exact turn correlation, replay protection, and explicit
+handling of pending journals and skipped, rejected, or limited turns. Native
+`completed` alone does not prove successful completion of the user's task.
+The reducer is in
+[`_projection.py`](https://github.com/mistralai/mistral-vibe/blob/b20313e01d6926d4191da89c32d5da11e3a0a060/harness/runtimes/python/python/mistralai_vibe_local_harness/vibe/_projection.py).
+
+That snapshot is not a complete root outcome log: a newer turn replaces the
+latest turn, and generation publication can lag the journal. The optional
+`session_api.turn_outcomes` ledger is recorded only when the native Session API
+is enabled; ordinary sessions use `NoFacts`, as specified by
+[`_fact_recorder.py`](https://github.com/mistralai/mistral-vibe/blob/b20313e01d6926d4191da89c32d5da11e3a0a060/harness/runtimes/python/python/mistralai_vibe_local_harness/vibe/_fact_recorder.py).
+The qualified Vibe 3.1.2 CLI fixture has no such ledger. Complete live reporting
+needs the attached turn/state stream and its gap-recovery rules. The existing
+notification hooks omit native turn identity and suppress some terminal notices
+while queued work or callbacks remain, so they remain inferred phase hints.
+
+Native approval and question callbacks have stable IDs. The live protocol sends
+`callback/call`; delivery acknowledgement is distinct from the semantic answer
+submitted through `callback/result`. Answer, cancellation, and expiry must be
+paired to that same native request. The Session overlays current
+`activeCallbacks` on its live public state in
+[`_session.py`](https://github.com/mistralai/mistral-vibe/blob/b20313e01d6926d4191da89c32d5da11e3a0a060/harness/runtimes/python/python/mistralai_vibe_local_harness/vibe/_session.py).
+The recovery store retains pending registrations but drops settled callback
+records during compaction in
+[`_storage.py`](https://github.com/mistralai/mistral-vibe/blob/b20313e01d6926d4191da89c32d5da11e3a0a060/harness/runtimes/python/python/mistralai_vibe_local_harness/vibe/_storage.py).
+Disappearance alone is not a matching resolution. A next paired-attention
+implementation should consume the live callback state, reconcile reconnects,
+and qualify approval, denial, answer, cancellation, and expiry before declaring
+`paired_attention` supported.
+
+### Ongoing model context and execution directory
+
+Startup/resume guidance already uses native hidden `session_start` context.
+Native `pre_agent` can also accept `additional_context`, but its
+[`_foreign_hooks.py`](https://github.com/mistralai/mistral-vibe/blob/b20313e01d6926d4191da89c32d5da11e3a0a060/harness/runtimes/python/python/mistralai_vibe_local_harness/vibe/_foreign_hooks.py)
+always generates a visible added-context notice. Its payload also does not carry
+the Logonomic activation nonce captured at session start. Looking up the host's
+current nonce when a delayed hook arrives would not satisfy the SDK's
+[`model-context-delivery@2`](https://github.com/Varinomics/logonomic/blob/master/sdk/logonomic_cli_addon_sdk/docs/model_context_delivery_2.md)
+contract. A future per-turn hook route needs both
+source-captured attribution and a qualified native presentation path. On an
+owned live connection, `session/context/inject` and state-appropriate
+`turn/steer` provide separate native delivery routes; they still require exact
+activation and acceptance handling.
+
+Worktree movement does have a native fact after the tools move: the backend
+emits `session/updated` with a `/cwd` patch from `_announce_cwd`. The earlier
+worktree-prepared notification and the tool's returned target are insufficient;
+the deferred move can still be dropped. See `enter_worktree`,
+`_move_session`, and `_announce_cwd` in the
+[`backend adapter`](https://github.com/mistralai/mistral-vibe/blob/b20313e01d6926d4191da89c32d5da11e3a0a060/vibe/app_server/_unified_harness_backend_adapter.py).
+The SDK's
+[`execution-context@1`](https://github.com/Varinomics/logonomic/blob/master/sdk/logonomic_cli_addon_sdk/docs/execution_context_1.md)
+requires the actual default directory plus a
+source-captured activation and sequence. Transcript metadata, per-command
+directories, and launch input do not meet that contract. Until an attributed
+live route is adopted, this package reports only its joint native session-start
+cwd fact. Reporting a directory also does not independently prove a Git
+worktree or repository identity.
+
+### Authentication, quotas, and owned tasks
+
+Native `providerAuth/read` is a redacted credential-source view. It deliberately
+does not contact a provider, so a configured source is not authenticated proof;
+see
+[`_provider_auth.py`](https://github.com/mistralai/mistral-vibe/blob/b20313e01d6926d4191da89c32d5da11e3a0a060/vibe/app_server/_provider_auth.py).
+Native `account/read` can return ready, missing-key, unauthorized, or unavailable
+state and a monthly Vibe Code budget with usage percentage and reset time.
+These are real upstream sources for future
+[`auth-status@2`](https://github.com/Varinomics/logonomic/blob/master/sdk/logonomic_cli_addon_sdk/docs/auth_status_2.md)
+and
+[`quota@2`](https://github.com/Varinomics/logonomic/blob/master/sdk/logonomic_cli_addon_sdk/docs/quota_2.md)
+probes. However, they are session-scoped APIs, and
+[`AccountController.read`](https://github.com/mistralai/mistral-vibe/blob/b20313e01d6926d4191da89c32d5da11e3a0a060/vibe/app_server/_account.py)
+may reconcile tenant configuration after the lookup. A probe must establish
+frozen provider/account scope, native credential custody, permitted effects,
+timeouts, and redacted result mapping; it must not present another independently
+opened session's account as the interactive session's current account. No
+account-selection catalogue has been adopted by this package.
+
+Fresh Logonomic-owned tasks are a separate route and do not need to observe the
+interactive session. Native `-p` reads the prompt from stdin when no prompt
+argument is supplied, and `--output streaming` emits completed public history
+entries. A bounded `structured-session@3` implementation can retain that exact
+task session and turn, require final stream completion and a successful native
+exit, and return committed assistant text. It must preserve the user's approval
+mode; `ask` is not a read-only policy. The native output contract is in
+[`headless_output.rs`](https://github.com/mistralai/mistral-vibe/blob/b20313e01d6926d4191da89c32d5da11e3a0a060/vibe/cli-rust/src/headless_output.rs).
+This is an actionable implementation route, not a live-attachment blocker.
+Delegated tasks additionally require the SDK's host-supplied task-server relay
+and a qualified native MCP readiness/acknowledgement path. Ordinary headless
+execution alone does not establish that delegated coordination contract.

@@ -45,6 +45,9 @@ persisted evidence used here. Vibe 3's unified store is the source; an older
 `messages.jsonl` layout is not a substitute for its accounting or transcript
 contract.
 
+The [native integration notes](docs/native_usage_and_context.md#remaining-features-and-implementation-routes)
+identify concrete native interfaces and evidence gaps for the remaining work.
+
 ## Using the package
 
 Install Vibe separately and make its executable available in the environment
