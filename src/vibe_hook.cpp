@@ -80,18 +80,39 @@ void deliver(int argc, char** argv)
         return std::chrono::steady_clock::now() >= deadline;
     });
     const auto key = addon::random_nonce_hex();
-    const auto outcome = client.deliver_provider_event(event->name, event->body, key);
+    // Capture the native activation before delivery. Never ask for guidance
+    // using whichever activation happens to be current after the host replies.
+    const auto nonce = addon::random_nonce_hex();
+    const auto outcome = client.deliver_provider_event(event->name, event->body, key, nonce);
     if (outcome.committed) {
         (void)client.acknowledge_provider_event(key);
     }
+    if (!outcome.accepted || event->name != "session_start") {
+        return;
+    }
+    addon::Model_context_delivery delivery;
+    delivery.activation = addon::Model_context_activation{
+        event->body.find("session_id")->as_string(), nonce};
+    const auto guidance = client.request_title_instruction("vibe", event->name, false, std::move(delivery));
+    if (!guidance.accepted || guidance.instruction.empty()) {
+        return;
+    }
+    // Vibe consumes this context with the next user message, outside visible
+    // history. The host owns the text and one-shot decision. Do not rewrite the
+    // user's prompt or print a system_message into the interactive UI.
+    auto output = addon::Json_value::object();
+    auto specific = addon::Json_value::object();
+    specific.set("additional_context", addon::Json_value(guidance.instruction));
+    output.set("hook_specific_output", std::move(specific));
+    std::cout << addon::serialize_json(output) << '\n';
 }
 
 } // namespace
 
 int main(int argc, char** argv)
 {
-    // This observational hook must not replace prompts or block the CLI. Its
-    // stdout is intentionally empty even when provider-event delivery fails.
+    // Hook failure is observational: it must not replace prompts or block the
+    // CLI. Only accepted host-owned model context may appear on stdout.
     try {
         deliver(argc, argv);
     }

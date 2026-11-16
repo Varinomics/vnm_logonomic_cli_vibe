@@ -34,6 +34,7 @@ import sys
 
 RESUME_PROMPT = "Continue the exact saved delegation conversation."
 RESUME_ANSWER = "Resumed the exact saved conversation."
+TITLE_GUIDANCE = "Logonomic guidance fixture: keep a meaningful task title and include a concise final summary."
 
 
 def require(condition, message):
@@ -215,6 +216,13 @@ def create_host_fixture(path, deliveries):
         "    print(json.dumps({'accepted': True, 'epoch': 1}))\n"
         "elif len(sys.argv) == 4 and sys.argv[1:3] == ['provider-event', 'acknowledge']:\n"
         "    (root / (sys.argv[3] + '.ack')).write_text('acknowledged', encoding='utf-8')\n"
+        "elif sys.argv[1:] == ['request-title-instruction', '--args-stdin']:\n"
+        "    request = json.load(sys.stdin)\n"
+        "    (root / (uuid.uuid4().hex + '.guidance')).write_text(json.dumps(request), encoding='utf-8')\n"
+        "    activation = request.get('delivery', {}).get('activation', {})\n"
+        "    events = [json.loads(p.read_text('utf-8')) for p in root.glob('*.json')]\n"
+        "    accepted = any(e['event']['name'] == 'session_start' and e['event']['body']['session_id'] == activation.get('provider_session_id') and e['transition_nonce'] == activation.get('transition_nonce') for e in events)\n"
+        f"    print(json.dumps({{'accepted': True, 'instruction_required': True, 'instruction': {TITLE_GUIDANCE!r}}} if accepted else {{'accepted': False, 'reason': 'stale_activation'}}))\n"
         "else:\n"
         "    sys.exit(2)\n",
         encoding="utf-8",
@@ -287,7 +295,8 @@ def run(arguments):
             require(len(starts) == 1, "Native session_start did not reach the packaged helper")
             root_session = Path(starts[0]["body"]["transcript_path"])
         messages = payload.get("messages") or []
-        if any(message.get("role") == "user" and message.get("content") == RESUME_PROMPT
+        if any(message.get("role") == "user" and
+               str(message.get("content", "")).startswith(RESUME_PROMPT)
                for message in messages):
             return assistant_text_chunks(RESUME_ANSWER, created=130)
         label = "child-running" if not _is_parent_request(payload) else "child-settled"
@@ -364,12 +373,21 @@ def run(arguments):
             "ledger": {"current_epoch": 0, "current_transition": None},
             "transition_nonce": "2" * 32,
             "execution_model": {"version": 1},
+            "execution_context": {"version": 1},
         })
         models = classification["execution_model"]["updates"]
         require(len(models) == 1 and models[0] == {
             "provider_session_id": starts[0]["event"]["body"]["session_id"],
             "agent_id": "", "model": "mock-model", "source": "session",
         }, "The native selected model did not survive helper delivery and classification")
+        directories = classification["execution_context"]["updates"]
+        require(directories == [{
+            "provider_session_id": starts[0]["event"]["body"]["session_id"],
+            "transition_nonce": "2" * 32, "sequence": "0", "state": "confirmed",
+            "environment": "local", "cwd": str(workspace), "source": "vibe.session_start.cwd",
+        }], "The native session's actual cwd did not reach joint classification")
+        require(TITLE_GUIDANCE in str(server.requests[0]["messages"]),
+                "Native startup did not deliver host-provided guidance to the model")
         record = next(observation["resume_record"] for observation in classification["observations"]
                       if "resume_record" in observation)
         session = Path(record["transcript_path"])
@@ -401,6 +419,9 @@ def run(arguments):
         child.close()
         require(child.exitstatus == 0, f"Interactive bridge exited {child.exitstatus}/{child.signalstatus}")
         latest = server.requests[-1]
+        require(TITLE_GUIDANCE in str(latest["messages"]),
+                "Native resume did not carry the host-provided model guidance")
+        require(TITLE_GUIDANCE not in captured.getvalue(), "Model guidance leaked into the visible conversation")
         require(any(message.get("role") == "user" and PARENT_PROMPT in str(message.get("content"))
                     for message in latest["messages"]), "Native resume lost the earlier parent prompt")
         resumed = [json.loads(path.read_text("utf-8"))["event"] for path in deliveries.glob("*.json")]
@@ -420,6 +441,8 @@ def run(arguments):
             "interactive_exact_resume": True, "native_store": str(session),
             "subagent_observer": observer_result,
             "native_model_report": models[0],
+            "native_execution_directory": directories[0],
+            "model_context_transport": "verified; scripted model does not establish instruction compliance",
         }
         write_json(root / "result.json", summary)
         print(json.dumps(summary, indent=2))

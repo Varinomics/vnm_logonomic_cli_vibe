@@ -9,7 +9,7 @@ import sys
 import tempfile
 
 
-def run_hook(executable, payload, environment, *arguments, timeout=15):
+def run_hook(executable, payload, environment, *arguments, timeout=15, expected_context=None):
     data = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
     result = subprocess.run(
         [str(executable), *arguments],
@@ -21,7 +21,12 @@ def run_hook(executable, payload, environment, *arguments, timeout=15):
         check=False,
     )
     assert result.returncode == 0, result.returncode
-    assert result.stdout == b"", result.stdout
+    if expected_context is None:
+        assert result.stdout == b"", result.stdout
+    else:
+        assert json.loads(result.stdout) == {
+            "hook_specific_output": {"additional_context": expected_context},
+        }, result.stdout
     assert result.stderr == b"", result.stderr
 
 
@@ -37,6 +42,7 @@ def main():
         root = Path(temporary)
         captured = root / "wrapper_delivery.json"
         acknowledged = root / "wrapper_delivery.json.ack"
+        guidance = root / "wrapper_delivery.json.guidance"
         wrapper = root / ("fake_vnmctl.exe" if os.name == "nt" else "fake_vnmctl")
         shutil.copy2(fixture, wrapper)
         home = root / "profile with spaces"
@@ -75,6 +81,30 @@ def main():
         }, delivery
         assert len(json.dumps(delivery)) < 4096
 
+        # Context is captured for the source activation before delivery. The
+        # native response contains only host-provided context, never a prompt
+        # replacement, implementation details, or a visible system message.
+        guidance.unlink()
+        run_hook(executable, payload, dict(environment, VIBE_TEST_GUIDANCE="accept"),
+                 expected_context='Host title guidance.\nPreserve "quoted" text.')
+        delivery = json.loads(captured.read_text("utf-8"))
+        requests = [json.loads(line) for line in guidance.read_text("utf-8").splitlines()]
+        assert requests == [{
+            "source": "vibe", "hook_event_name": "session_start", "changed_files_requested": False,
+            "delivery": {"version": 2, "kind": "model-context", "activation": {
+                "provider_session_id": payload["session_id"],
+                "transition_nonce": delivery["transition_nonce"],
+            }},
+        }], requests
+        for mode in ("refuse", "malformed", "stall"):
+            guidance.unlink()
+            run_hook(executable, payload, dict(environment, VIBE_TEST_GUIDANCE=mode), timeout=5)
+            assert len(guidance.read_text("utf-8").splitlines()) == 1, "refused context retried without its fence"
+        guidance.unlink()
+        run_hook(executable, {"hook_event_name": "pre_agent", "session_id": payload["session_id"]},
+                 dict(environment, VIBE_TEST_GUIDANCE="accept"))
+        assert not guidance.exists(), "turn hook requested visible model context"
+
         # Invalid and unsupported events remain observational no-ops and never
         # invoke the host wrapper or reveal their input in stdout/stderr.
         original_delivery = captured.read_bytes()
@@ -92,6 +122,7 @@ def main():
         run_hook(executable, payload, dict(environment, VIBE_TEST_WRAPPER_FAIL="1"))
         assert captured.is_file()
         assert not acknowledged.exists()
+        assert not guidance.exists(), "rejected event requested model context"
 
         # Vibe's outer five-second hook deadline must not kill the helper while
         # it is waiting for the host. The fixture would return only after eight

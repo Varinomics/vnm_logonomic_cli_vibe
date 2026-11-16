@@ -231,6 +231,46 @@ void selected_model()
         result.observations.size() == 1, "optional request failure changed lifecycle classification");
 }
 
+void execution_directory()
+{
+    auto payload = native_event("session_start");
+    payload.set("source", addon::Json_value("resume"));
+    const auto cwd = native_path("vibe project/nested directory");
+    payload.set("cwd", addon::Json_value(cwd));
+    auto input = request(compact("session_start", payload), false);
+    require(classify(input).execution_updates.empty(), "unnegotiated cwd was emitted");
+    input.execution_context_version = 1;
+    auto result = classify(input);
+    require(result.execution_updates.size() == 1 && !result.execution_failure,
+        "native session_start cwd was lost");
+    const auto& update = result.execution_updates.front();
+    require(update.provider_session_id == k_session && update.transition_nonce == k_nonce &&
+        update.sequence == 0 && update.status == addon::Execution_context_status::CONFIRMED &&
+        update.environment == "local" && update.cwd == cwd && update.source == "vibe.session_start.cwd",
+        "joint native cwd changed its activation, path, or source");
+    for (const auto invalid : {"relative/path", "/invalid\npath"}) {
+        input.event.body.set("cwd", addon::Json_value(invalid));
+        result = classify(input);
+        require(result.classification == addon::Classification::TRANSITION && result.execution_updates.empty() &&
+            result.execution_failure, "invalid optional cwd suppressed lifecycle or became confirmed");
+    }
+    input.event.body.set("cwd", addon::Json_value());
+    result = classify(input);
+    require(result.execution_updates.empty() && !result.execution_failure,
+        "missing native cwd was replaced by a launch or transcript path");
+
+    payload = native_event("pre_agent");
+    payload.set("cwd", addon::Json_value(cwd));
+    input = request(compact("pre_agent", payload));
+    input.execution_context_version = 1;
+    require(classify(input).execution_updates.empty(), "later cwd acquired a nonce from host arrival state");
+    input.execution_failure = addon::Contract_failure{"unsupported_execution_version", {}};
+    result = classify(input);
+    require(result.observations.size() == 1 && result.execution_failure &&
+        result.execution_failure->reason_code == "unsupported_execution_version",
+        "optional cwd request failure affected lifecycle classification");
+}
+
 void declared_profile(const char* path)
 {
     std::ifstream stream(path, std::ios::binary);
@@ -257,6 +297,7 @@ int main(int argc, char** argv)
         correlation_and_unsupported_events();
         compact_payloads();
         selected_model();
+        execution_directory();
         std::cout << "Vibe lifecycle contracts passed\n";
         return 0;
     }

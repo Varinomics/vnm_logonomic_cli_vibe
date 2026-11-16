@@ -105,6 +105,9 @@ std::optional<addon::Provider_event> compact_hook_event(
         if (const auto model = text(payload, "model", 256)) {
             event.body.set("model", addon::Json_value(*model));
         }
+        if (const auto cwd = text(payload, "cwd", 4096)) {
+            event.body.set("cwd", addon::Json_value(*cwd));
+        }
         if (!resume_record(event.body)) {
             return std::nullopt;
         }
@@ -142,6 +145,7 @@ addon::Classify_event_result classify_event(const addon::Classify_event_request&
 {
     addon::Classify_event_result result;
     result.model_failure = request.model_failure;
+    result.execution_failure = request.execution_failure;
     const auto& event = request.event;
     const auto session_id = text(event.body, "session_id", addon::limits::k_max_lifecycle_identity_bytes);
     if (!session_id) {
@@ -161,6 +165,23 @@ addon::Classify_event_result classify_event(const addon::Classify_event_request&
         observation.session_transition = addon::Session_transition::STARTED;
         observation.session_source = *source;
         observation.resume_record = std::move(record);
+        // The native session_start payload captures the actual default cwd.
+        // Joint identity/context admission uses this delivery's source nonce;
+        // later hooks cannot attribute delayed cwd facts to an activation.
+        if (request.execution_context_version == 1) {
+            if (const auto cwd = text(event.body, "cwd", 4096)) {
+                addon::Execution_context_update update{
+                    std::string(*session_id), request.transition_nonce, 0,
+                    addon::Execution_context_status::CONFIRMED, "local", std::string(*cwd),
+                    "vibe.session_start.cwd"};
+                if (addon::is_valid_execution_context_update(update)) {
+                    result.execution_updates.push_back(std::move(update));
+                }
+                else {
+                    result.execution_failure = addon::Contract_failure{"vibe_execution_directory_invalid", {}};
+                }
+            }
+        }
         if (request.execution_model_version == 1) {
             if (const auto model = text(event.body, "model", 256)) {
                 addon::Execution_model_update update{
