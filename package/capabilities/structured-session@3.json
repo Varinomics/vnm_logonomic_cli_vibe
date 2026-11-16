@@ -1,0 +1,16 @@
+{
+  "capability_id": "structured-session",
+  "version": 3,
+  "payload": {
+    "purposes": ["implementation"],
+    "environment_names": [
+      "VIBE_HOME", "VIBE_CWD", "MISTRAL_API_KEY", "VIBE_ACTIVE_MODEL",
+      "VIBE_DEFAULT_AGENT", "VIBE_TOOLS", "VIBE_ENABLED_TOOLS", "VIBE_DISABLED_TOOLS",
+      "VIBE_OUTSIDE_WORKDIR", "VIBE_ENABLE_AUTO_APPROVE", "VIBE_BYPASS_TOOL_PERMISSIONS",
+      "VIBE_ENABLE_MCP", "VIBE_MCP_SERVERS", "VIBE_AGENT_PATHS", "VIBE_ENABLED_AGENTS",
+      "VIBE_DISABLED_AGENTS", "VIBE_PROVIDERS", "VIBE_MODELS", "VIBE_ENABLE_CONNECTORS",
+      "VIBE_CONNECTORS", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+      "SSL_CERT_FILE", "SSL_CERT_DIR", "LANG", "LC_ALL", "TMPDIR"
+    ]
+  }
+}
