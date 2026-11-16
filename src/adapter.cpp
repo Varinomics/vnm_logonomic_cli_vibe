@@ -3,11 +3,13 @@
 #include "vibe_events.h"
 #include "vibe_observer.h"
 #include "vibe_resume.h"
+#include "vibe_usage.h"
 
 #include <logonomic_cli_addon/adapter_runtime.h>
 #include <logonomic_cli_addon/helper_ingress.h>
 #include <logonomic_cli_addon/managed_configuration.h>
 #include <logonomic_cli_addon/package_source.h>
+#include <logonomic_cli_addon/profile_storage.h>
 
 #include <exception>
 #include <utility>
@@ -87,6 +89,7 @@ int main()
         {"execution-model", 1},
         {"execution-context", 1}, {"model-context-delivery", 2},
         {"context-state", 2},
+        {"profile-storage", 1}, {"usage-scan", 3}, {"usage-session", 1}, {"usage-temporal", 1},
         {"interactive-resume", 2}, {"interactive-resume", 3},
     };
     addon::Adapter_runtime runtime(std::move(options));
@@ -99,6 +102,10 @@ int main()
             else if (request.capability.capability_id == "lifecycle-events") observer.handle_observation(context);
             else if (request.capability.capability_id == "lifecycle-correlation-lifetime") observer.handle_lifetime(context);
             else if (request.capability.capability_id == "interactive-resume") vibe::handle_resume(context);
+            else if (request.capability.capability_id == "usage-scan") vibe::handle_usage_scan(context);
+            else if (request.capability.capability_id == "usage-session") vibe::handle_usage_session(context);
+            else if (request.capability.capability_id == "profile-storage" &&
+                request.operation == addon::k_profile_storage_acknowledge) addon::acknowledge_profile_storage(context);
             else vibe::handle_launcher(context);
         }
         catch (const std::exception&) {

@@ -341,6 +341,35 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(response["reason"], "unknown_operation", response)
         self.assertTrue(self.recognize("vibe")["recognized"])
 
+    def test_usage_storage_and_session_admission(self):
+        executable, environment = self.installed_cli()
+        request = self.preparation_request(executable, environment)
+        request.pop("title_instruction")
+        profile = request["profile_storage"]
+        self.assertEqual(self.success("profile-storage", 1, "acknowledge", {
+            "profile_storage": profile,
+        }), {"profile_storage": profile})
+        candidate = Path(profile["root"]) / "usage-candidate"
+        candidate.mkdir()
+        request.update({
+            "mode": "incremental", "snapshot_id": None, "cursor": None,
+            "cache_selection": {"version": 1, "accepted": None, "candidate_root": str(candidate)},
+        })
+        result = self.success("usage-scan", 3, "scan", request)
+        self.assertEqual(result["profile_storage"], profile)
+        self.assertEqual(result["records"], [])
+        self.assertTrue(result["complete"])
+        self.assertTrue(result["incomplete_historical_coverage"])
+        self.assertEqual(result["cache_candidate"]["root"], str(candidate))
+        self.assertTrue((candidate / "cache-manifest.json").is_file())
+        session = "root-session"
+        identity = {"record_id": "vibe-session:" + hashlib.sha256(session.encode()).hexdigest(),
+                    "session_key": session}
+        descriptions = self.success("usage-session", 1, "describe", {"records": [identity]})
+        self.assertEqual(descriptions, {"records": [{**identity, "session": {
+            "version": 1, "provider_session_id": session, "excludes_turn_in_flight": False,
+        }}]})
+
     def test_observation_binding_requires_reserved_frozen_context(self):
         nonce = "e" * 32
         payload = {
