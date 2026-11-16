@@ -118,16 +118,21 @@ addon::Conversation_message message_entry(const addon::Json_value& entry)
     const auto* outcome = entry.find("outcome");
     const auto* outcome_kind = outcome ? optional_text(*outcome, "type") : nullptr;
     const bool discarded = outcome_kind && *outcome_kind == "discarded";
+    const bool discarded_assistant = discarded && message.role == "assistant";
     if (discarded) {
-        std::string label = "Discarded assistant content";
+        // Vibe also marks a user's prompt discarded when a pre_agent hook
+        // skips its turn. It remains user discussion in either projection.
+        std::string label = message.role == "user" ? "Skipped user message" :
+            "Discarded " + message.role + " content";
         if (const auto* cause = optional_text(*outcome, "cause")) {
             label += " (" + *cause + ")";
         }
-        message.content.push_back(block(addon::Conversation_block_kind::TEXT, std::move(label), "Outcome", false));
+        message.content.push_back(block(addon::Conversation_block_kind::TEXT, std::move(label), "Outcome",
+            !discarded_assistant));
     }
     for (const auto& part : content->as_array()) {
         auto rendered = content_block(part);
-        rendered.compact_visible = !discarded;
+        rendered.compact_visible = !discarded_assistant;
         message.content.push_back(std::move(rendered));
     }
     // The public history does not retain a final/commentary channel for every
@@ -155,6 +160,7 @@ addon::Conversation_message effect_entry(const addon::Json_value& entry)
     }
     const auto* output = state->find("output");
     const auto* content = output ? output->find("content") : nullptr;
+    bool has_result = false;
     if (content && content->is_array()) {
         for (const auto& part : content->as_array()) {
             auto rendered = content_block(part);
@@ -164,14 +170,25 @@ addon::Conversation_message effect_entry(const addon::Json_value& entry)
             rendered.label = label;
             rendered.compact_visible = false;
             message.content.push_back(std::move(rendered));
+            has_result = true;
         }
     }
-    else if (const auto* output_text = optional_text(*state, "outputText"); output_text && !output_text->empty()) {
-        message.content.push_back(block(addon::Conversation_block_kind::TOOL_RESULT, *output_text, label, false));
-    }
-    else if (output && !output->is_null()) {
+    // Native tools can return only structured_content, or both structured and
+    // textual content. An empty content array does not mean an empty result.
+    const auto* structured = output ? output->find("structured_content") : nullptr;
+    if (structured && !structured->is_null()) {
         message.content.push_back(block(addon::Conversation_block_kind::TOOL_RESULT,
-            addon::serialize_json_canonical(*output), label, false));
+            addon::serialize_json_canonical(*structured), label, false));
+        has_result = true;
+    }
+    if (!has_result) {
+        if (const auto* output_text = optional_text(*state, "outputText"); output_text && !output_text->empty()) {
+            message.content.push_back(block(addon::Conversation_block_kind::TOOL_RESULT, *output_text, label, false));
+        }
+        else if (output && !output->is_null()) {
+            message.content.push_back(block(addon::Conversation_block_kind::TOOL_RESULT,
+                addon::serialize_json_canonical(*output), label, false));
+        }
     }
     const auto& status = text(*state, "status");
     if (status != "completed") {
@@ -198,6 +215,16 @@ addon::Conversation_message render_entry(const addon::Json_value& entry)
     addon::Conversation_message message;
     message.role = kind == "reasoning" ? "assistant" : "system";
     if (kind == "reasoning") {
+        const auto* outcome = entry.find("outcome");
+        const auto* outcome_kind = outcome ? optional_text(*outcome, "type") : nullptr;
+        if (outcome_kind && *outcome_kind == "discarded") {
+            std::string label = "Discarded reasoning";
+            if (const auto* cause = optional_text(*outcome, "cause")) {
+                label += " (" + *cause + ")";
+            }
+            message.content.push_back(block(addon::Conversation_block_kind::TEXT,
+                std::move(label), "Outcome", false));
+        }
         std::string body = text(entry, "text");
         if (const auto* summaries = entry.find("summary"); summaries && summaries->is_array()) {
             for (const auto& summary : summaries->as_array()) {

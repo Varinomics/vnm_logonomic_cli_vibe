@@ -289,6 +289,37 @@ void immutable_pagination()
     require(!changed.success && changed.reason == "vibe_usage_snapshot_context_changed",
         "continuation accepted another frozen launcher context");
 }
+
+void conflicting_unavailable_copies()
+{
+    for (const bool missing_first : {true, false}) {
+        Store_fixture store;
+        store.publish(runtime());
+        publish_projection(store, projection());
+        Store_fixture missing;
+        missing.publish(runtime());
+        auto unavailable = projection();
+        unavailable.find("snapshot")->find("session")->set("tokenUsage", addon::Json_value());
+        publish_projection(missing, unavailable);
+        const auto early = store.root / "a-history";
+        const auto late = store.root / "z-history";
+        fs::create_directories(early / "unified");
+        fs::create_directories(late / "unified");
+        fs::copy(missing_first ? missing.transcript : store.transcript,
+            early / "unified/root-session", fs::copy_options::recursive);
+        fs::copy(missing_first ? store.transcript : missing.transcript,
+            late / "unified/root-session", fs::copy_options::recursive);
+        auto input = request(store);
+        input.context.launch_environment->effective_environment.set("VIBE_SESSION_LOGGING__SAVE_DIR",
+            addon::Json_value(addon::path_to_utf8(early)));
+        fs::create_directories(store.root / "vibe-home");
+        write(store.root / "vibe-home/config.toml", "[session_logging]\nsave_dir = " +
+            canonical(addon::Json_value(addon::path_to_utf8(late))) + "\n");
+        const auto result = scan(input);
+        require(!result.success && result.reason == "vibe_usage_duplicate_source_conflict",
+            "unavailable counter copy made duplicate-source conflict depend on root ordering");
+    }
+}
 } // namespace
 
 int main()
@@ -299,6 +330,7 @@ int main()
         distinct_native_children();
         forked_history_is_not_billing();
         configured_history_location();
+        conflicting_unavailable_copies();
         immutable_pagination();
         std::cout << "Vibe native usage tests passed\n";
         return 0;

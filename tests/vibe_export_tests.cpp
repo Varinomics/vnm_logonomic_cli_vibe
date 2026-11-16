@@ -191,6 +191,67 @@ void rejected_sources_and_tail()
         "conflicting native duplicate produced a partial artifact");
 }
 
+void structured_tool_results()
+{
+    Store_fixture store;
+    store.publish(runtime());
+    auto value = projection();
+    auto entries = addon::Json_value::array();
+    auto effect = entry("effect", "structured-only");
+    effect.set("title", addon::Json_value("agents.list"));
+    effect.set("detail", json(R"({"kind":"tool","toolName":"agents.list","input":{}})"));
+    effect.set("state", json(R"({"status":"completed","output":{"content":[],"structured_content":{"agents":[{"name":"native-explorer","status":"running"}]}},"outputText":""})"));
+    entries.push_back(effect);
+    effect.set("id", addon::Json_value("mixed-output"));
+    effect.set("state", json(R"({"status":"completed","output":{"content":[{"type":"text","text":"Native textual result"}],"structured_content":{"structured_marker":"Native structured result"}},"outputText":"duplicate fallback"})"));
+    entries.push_back(effect);
+    effect.set("id", addon::Json_value("text-fallback"));
+    effect.set("state", json(R"({"status":"completed","output":{"content":[]},"outputText":"Native outputText fallback"})"));
+    entries.push_back(effect);
+    value.find("snapshot")->find("history")->set("entries", entries);
+    publish_projection(store, value);
+    for (const auto format : {addon::Conversation_export_format::TEXT,
+        addon::Conversation_export_format::MARKDOWN, addon::Conversation_export_format::CONVERSATION})
+    {
+        const auto [result, body] = exported(request(store, format));
+        require(result.message_count == 3 && body.find("native-explorer") != std::string::npos &&
+            body.find("Native textual result") != std::string::npos &&
+            body.find("Native structured result") != std::string::npos &&
+            body.find("Native outputText fallback") != std::string::npos &&
+            body.find("duplicate fallback") == std::string::npos,
+            "native structured tool output or text fallback was lost or duplicated");
+    }
+}
+
+void discarded_history_roles()
+{
+    Store_fixture store;
+    store.publish(runtime());
+    auto value = projection();
+    auto user = message("user", "skipped-user", "Keep this skipped user discussion");
+    user.set("source", addon::Json_value("turn_start"));
+    user.set("turnId", addon::Json_value("turn-1"));
+    user.set("outcome", json(R"({"type":"discarded","cause":"skipped"})"));
+    auto reasoning = entry("reasoning", "discarded-reasoning");
+    reasoning.set("text", addon::Json_value("Interrupted internal reasoning"));
+    reasoning.set("outcome", json(R"({"type":"discarded","cause":"interrupt"})"));
+    auto entries = addon::Json_value::array();
+    entries.push_back(user);
+    entries.push_back(reasoning);
+    value.find("snapshot")->find("history")->set("entries", entries);
+    publish_projection(store, value);
+    const auto [full, body] = exported(request(store));
+    require(full.message_count == 2 && body.find("Keep this skipped user discussion") != std::string::npos &&
+        body.find("Skipped user message") != std::string::npos &&
+        body.find("Discarded reasoning") != std::string::npos &&
+        body.find("Discarded assistant content") == std::string::npos,
+        "discarded native user or reasoning content was mislabeled");
+    const auto [compact, discussion] = exported(request(store, addon::Conversation_export_format::MARKDOWN, true));
+    require(compact.message_count == 1 && discussion.find("Keep this skipped user discussion") != std::string::npos &&
+        discussion.find("Interrupted internal reasoning") == std::string::npos,
+        "compact export discarded user discussion or retained interrupted reasoning");
+}
+
 void large_text_and_cancellation()
 {
     Store_fixture store;
@@ -225,6 +286,8 @@ int main()
 {
     try {
         native_rendering();
+        structured_tool_results();
+        discarded_history_roles();
         rejected_sources_and_tail();
         large_text_and_cancellation();
         std::cout << "Vibe native export tests passed\n";

@@ -251,7 +251,13 @@ std::string date(std::uint64_t milliseconds)
     return output.str();
 }
 
-std::optional<Saved_record> read_record(const fs::path& transcript)
+struct Native_usage_read
+{
+    std::string current_sha256;
+    std::optional<Saved_record> record;
+};
+
+Native_usage_read read_record(const fs::path& transcript)
 {
     const auto session_id = addon::path_to_utf8(transcript.filename());
     const auto native = read_native_snapshot(transcript, session_id);
@@ -261,7 +267,7 @@ std::optional<Saved_record> read_record(const fs::path& transcript)
     const auto* session = projection.projection->find("snapshot")->find("session");
     const auto* counts = session->find("tokenUsage");
     if (!counts || counts->is_null()) {
-        return std::nullopt;
+        return {native.snapshot->current_sha256, std::nullopt};
     }
     const auto input = integer(*counts, "inputTokens");
     const auto output = integer(*counts, "outputTokens");
@@ -295,8 +301,8 @@ std::optional<Saved_record> read_record(const fs::path& transcript)
     addon::Contract_failure failure;
     require(addon::decode_usage_record(addon::encode_usage_record(usage), &failure).has_value(),
         "vibe_usage_record_invalid");
-    return Saved_record{std::move(usage), native.snapshot->generation,
-        native.snapshot->snapshot_sequence, native.snapshot->current_sha256};
+    return {native.snapshot->current_sha256, Saved_record{std::move(usage), native.snapshot->generation,
+        native.snapshot->snapshot_sequence, native.snapshot->current_sha256}};
 }
 
 void merge_record(Records& records, Saved_record incoming)
@@ -321,7 +327,7 @@ void merge_record(Records& records, Saved_record incoming)
 
 void scan_sources(Records& records, const addon::Usage_scan_request& request, addon::Invocation_context& context)
 {
-    std::map<std::string, Saved_record> seen;
+    std::map<std::string, std::string> seen;
     std::uint64_t inspected = 0;
     for (const auto& root : source_roots(request)) {
         const auto unified = root / "unified";
@@ -342,21 +348,17 @@ void scan_sources(Records& records, const addon::Usage_scan_request& request, ad
             if (!fs::is_directory(child_status)) {
                 continue;
             }
-            auto record = read_record(entry->path());
-            if (record) {
-                const auto old = seen.find(record->usage.record_id);
-                if (old != seen.end()) {
-                    require(old->second.current_sha256 == record->current_sha256,
-                        "vibe_usage_duplicate_source_conflict");
-                }
-                else {
-                    seen.emplace(record->usage.record_id, *record);
-                    merge_record(records, std::move(*record));
-                }
+            auto native = read_record(entry->path());
+            const auto key = record_id(addon::path_to_utf8(entry->path().filename()));
+            // A verified native copy is an identity witness even when it has
+            // no counters. Reject conflicting copies independently of order.
+            const auto [prior, inserted] = seen.emplace(key, native.current_sha256);
+            require(inserted || prior->second == native.current_sha256, "vibe_usage_duplicate_source_conflict");
+            if (native.record) {
+                if (inserted) merge_record(records, std::move(*native.record));
             }
             else {
-                require(!records.contains(record_id(addon::path_to_utf8(entry->path().filename()))),
-                    "vibe_usage_counter_unavailable");
+                require(!records.contains(key), "vibe_usage_counter_unavailable");
             }
             context.report_progress(++inspected, std::nullopt, "Reading native Vibe usage");
         }
