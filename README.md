@@ -34,12 +34,14 @@ fail their affected capability when the store contract is unfamiliar.
 | `usage-session@1` | Maps usage record keys back to exact native session IDs without claiming a completed-turn cutoff. |
 | `usage-temporal@1` | Explicitly marks the available cumulative usage as unallocated by date. |
 | `conversation-export@2` | Full or compact plain text, Markdown, and highlighted conversation exports from an exact retained native source. |
+| `structured-session@3` | Prepares fresh implementation tasks and inspects their native streaming output through final process exit. |
 | `interactive-resume@2` | Prepares the original full session ID with its native home and storage root, preserving supported launcher options. |
 | `interactive-resume@3` | Reads bounded native metadata and generation witnesses to inspect remembered-session availability without modifying history. |
 
-Account selection/authentication probes, quotas, Logonomic-launched delegated or
-structured tasks, ongoing coordination delivery, paired approvals, authoritative
-root turn outcomes, and mid-session worktree changes remain unimplemented.
+Account selection/authentication probes, quotas, Logonomic-launched delegated
+tasks, read-only structured review, ongoing coordination delivery, paired
+approvals, authoritative root turn outcomes, and mid-session worktree changes
+remain unimplemented.
 Usage by model and complete cache-token accounting remain unavailable from the
 persisted evidence used here. Vibe 3's unified store is the source; an older
 `messages.jsonl` layout is not a substitute for its accounting or transcript
@@ -182,6 +184,34 @@ See [native usage, context, and export contracts](docs/native_usage_and_context.
 for source locations, cache ownership, integrity checks, coverage boundaries,
 and compaction-count authority.
 
+### Owned implementation tasks
+
+Logonomic can prepare a fresh Vibe implementation task through
+`structured-session@3`, requiring Vibe 3.1.2 or newer. The host owns the attached
+process, deadline, output, and cancellation. The provider passes the prompt on
+stdin with native streaming output enabled, preserves the selected agent and
+approval options, and uses the frozen launcher environment. The prompt is not
+placed in command arguments. Preparation does not start the task.
+
+Inspection binds the native user entry to the requested prompt after Vibe's
+Unicode whitespace normalization, then retains that exact session and turn.
+Success requires a complete native stream, a successful final process exit,
+and committed assistant content from that task. An earlier assistant message
+cannot establish success before the final exit facts arrive. Invalid output,
+identity conflicts, unsuccessful exits, and timeouts remain failures.
+The headless stream does not establish the task's effective model, so its
+optional model report stays unavailable.
+
+This capability declares only the implementation purpose. Read-only review is
+unavailable because Vibe's `ask` approval mode does not enforce a read-only tool
+policy. The provider does not add automatic approval. Saved-session selectors,
+an existing launcher prompt, explicit cwd overrides, and selected-account
+contexts are refused for this fresh-task route. Delegated task-server relays
+remain a separate unimplemented capability.
+
+See [owned task contracts](docs/native_owned_tasks.md) for native source,
+inspection bounds, environment inputs, and qualification details.
+
 ### Remembered-session resume
 
 The resume record retains the full native session ID, its absolute Vibe home,
@@ -263,7 +293,8 @@ CTest groups cover launcher/version gates, TOML preservation and shell quoting,
 native lifecycle and optional-capability classification, helper transport and
 deadlines, correlated child observation, verified store/projection reads,
 context and compaction evidence, cumulative usage/cache preservation, export
-rendering, packaged protocol behavior, package validation, and SDK conformance.
+rendering, owned task preparation/inspection, packaged protocol behavior,
+package validation, and SDK conformance.
 Native contract fixtures cover unavailable and malformed evidence, replay,
 pagination, counter regressions, source conflicts, provisional history,
 structured tool results, role-correct discarded content, and cancellation.
@@ -278,9 +309,20 @@ excludes hidden model guidance. The scripted endpoint establishes native
 transport and data behavior; it does not establish that a model obeys title or
 summary instructions. No paid model backend is needed by this qualification.
 
-Run `tests/vibe_native_qualification.py --help` for the installed executable,
-matching upstream test-source checkout, built package, and fresh output-directory
-inputs. Windows/macOS interactive execution and live account/quota behavior
+The separate owned-task qualification uses the same native version and local
+endpoint for successful completion, an actual native model refusal, and a tool
+approval denied by the native `ask` policy. In the last case, Vibe emits a
+plausible answer and exits zero; the add-on still returns
+`hook_approval_required`, and the denied command leaves no side effect. Actual
+stdout is inspected in small fragments, with success withheld until final
+process facts. A deliberately active inherited hook route is disabled for the
+owned process, and the public prompt retains its exact normalized content.
+
+Run `tests/vibe_native_qualification.py --help` or
+`tests/vibe_native_tasks_qualification.py --help` for the installed executable,
+matching upstream test-source checkout, built package, and fresh evidence
+directory inputs. These provider qualifications do not exercise the Logonomic
+desktop UI. Windows/macOS native execution and live account/quota behavior
 remain outside the completed Linux qualification.
 
 Upstream source observation is recorded in

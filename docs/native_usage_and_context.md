@@ -276,12 +276,14 @@ account-selection catalogue has been adopted by this package.
 Fresh Logonomic-owned tasks are a separate route and do not need to observe the
 interactive session. Native `-p` reads the prompt from stdin when no prompt
 argument is supplied, and `--output streaming` emits completed public history
-entries. A bounded `structured-session@3` implementation can retain that exact
-task session and turn, require final stream completion and a successful native
-exit, and return committed assistant text. It must preserve the user's approval
-mode; `ask` is not a read-only policy. The native output contract is in
+entries. The package's implementation-only `structured-session@3` route retains
+that exact task session and turn, requires final stream completion and a
+successful native exit, and returns committed assistant text. It preserves the
+user's approval mode; `ask` is not a read-only policy. The native output contract
+is in
 [`headless_output.rs`](https://github.com/mistralai/mistral-vibe/blob/b20313e01d6926d4191da89c32d5da11e3a0a060/vibe/cli-rust/src/headless_output.rs).
-This is an actionable implementation route, not a live-attachment blocker.
+See [owned task contracts](native_owned_tasks.md) for the adopted route and its
+qualification. It does not need live attachment to the interactive session.
 Delegated tasks additionally require the SDK's host-supplied task-server relay
 and a qualified native MCP readiness/acknowledgement path. Ordinary headless
 execution alone does not establish that delegated coordination contract.
