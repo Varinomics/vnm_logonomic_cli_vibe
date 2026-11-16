@@ -146,10 +146,16 @@ addon::Classify_event_result classify_event(const addon::Classify_event_request&
     addon::Classify_event_result result;
     result.model_failure = request.model_failure;
     result.execution_failure = request.execution_failure;
+    if (request.context_failure) {
+        result.context_failure = addon::Context_failure{{}, *request.context_failure};
+    }
     const auto& event = request.event;
     const auto session_id = text(event.body, "session_id", addon::limits::k_max_lifecycle_identity_bytes);
     if (!session_id) {
         return result;
+    }
+    if (result.context_failure) {
+        result.context_failure->provider_session_id = *session_id;
     }
     addon::Lifecycle_observation observation;
     observation.provider_event_name = event.name;

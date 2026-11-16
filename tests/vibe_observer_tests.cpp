@@ -1,5 +1,5 @@
 #include "vibe_observer.h"
-#include "vibe_store_fixture.h"
+#include "vibe_projection_fixture.h"
 
 #include <logonomic_cli_addon/lifecycle_correlation_lifetime.h>
 #include <logonomic_cli_addon/lifecycle_events.h>
@@ -141,6 +141,66 @@ void optional_execution_context_failures()
         expected_poll.set("execution_context", failure);
         require(replay.success && replay.output == expected_poll,
             "optional execution-context failure was lost or changed the lifecycle page");
+    }
+}
+
+void current_context_carriers()
+{
+    Store_fixture store;
+    auto state = runtime();
+    set_child(state, child());
+    store.publish(state);
+    publish_projection(store, projection());
+    vibe::Observer observer;
+    bind(observer, store);
+    const auto classified = observer.read_context(k_nonce, "root-session", 42);
+    require(classified.update && classified.update->used_tokens == 90 &&
+        classified.update->compaction_count_revision == 42,
+        "classifier binding did not perform the authorized fresh context read");
+    require(observer.read_context(k_nonce, "foreign-session", 43).failure.has_value(),
+        "context read accepted another session under the same activation");
+    require(observer.read_context(k_other_nonce, "root-session", 43).failure.has_value(),
+        "context read searched for an unbound conversation");
+
+    auto watch = observation(store);
+    watch.input.payload.set("context_state_version", addon::Json_value(2));
+    observer.handle_observation(watch);
+    const auto observed = addon::decode_observe_result(watch.output, nullptr);
+    require(watch.success && observed && observed->context_updates.size() == 1 &&
+        observed->context_updates[0].used_tokens == 90 &&
+        !observed->context_updates[0].compaction_count_revision,
+        "watch lost occupancy or invented history sampling authority");
+    auto baseline = poll(observer);
+    Invocation with_context;
+    with_context.input = baseline.input;
+    with_context.input.payload.set("context_state_version", addon::Json_value(2));
+    observer.handle_observation(with_context);
+    const auto polled = page(with_context);
+    require(polled.context_updates.size() == 1 && polled.context_updates[0].used_tokens == 90 &&
+        !polled.context_updates[0].compaction_count_revision &&
+        *with_context.output.find("observations") == *baseline.output.find("observations") &&
+        *with_context.output.find("resume_cursor") == *baseline.output.find("resume_cursor"),
+        "context poll changed the replayable lifecycle page");
+
+    for (const auto& invalid : {addon::Json_value(99), addon::Json_value("malformed")}) {
+        watch = observation(store);
+        watch.input.payload.set("context_state_version", invalid);
+        observer.handle_observation(watch);
+        const auto result = addon::decode_observe_result(watch.output, nullptr);
+        require(watch.success && result && result->context_failure && result->context_updates.empty() &&
+            result->context_failure->provider_session_id == "root-session" &&
+            result->context_failure->failure.reason_code == "unsupported_version",
+            "watch lost or misattributed optional context request failure");
+        with_context = Invocation{};
+        with_context.input = baseline.input;
+        with_context.input.payload.set("context_state_version", invalid);
+        observer.handle_observation(with_context);
+        const auto result_page = page(with_context);
+        require(result_page.context_failure && result_page.context_updates.empty() &&
+            result_page.context_failure->provider_session_id == "root-session" &&
+            result_page.context_failure->failure.reason_code == "unsupported_version" &&
+            *with_context.output.find("observations") == *baseline.output.find("observations"),
+            "poll lost optional context failure or its lifecycle replay");
     }
 }
 
@@ -397,6 +457,7 @@ int main()
         fast_runs_and_regression();
         selected_model_changes();
         optional_execution_context_failures();
+        current_context_carriers();
         std::cout << "Vibe continuous observer tests passed\n";
         return 0;
     }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "vibe_context.h"
+
 #include <logonomic_cli_addon/adapter_runtime.h>
 
 #include <filesystem>
@@ -22,6 +24,11 @@ public:
     // Repeated binding is allowed only for the identical frozen context.
     bool bind(std::string_view transition_nonce, std::string_view provider_session_id,
         const std::filesystem::path& transcript);
+
+    // Uses only the transcript already bound by an authenticated transition.
+    // Reading occurs after the request, outside the observer's queue lock.
+    Native_context_result read_context(std::string_view transition_nonce, std::string_view provider_session_id,
+        std::optional<std::uint64_t> count_revision = std::nullopt) const;
 
     void handle_lifetime(logonomic::cli_addon::Invocation_context& context);
     void handle_observation(logonomic::cli_addon::Invocation_context& context);

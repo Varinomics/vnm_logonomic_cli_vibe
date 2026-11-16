@@ -310,6 +310,14 @@ struct Observer::Impl {
         addon::Observe_result result;
         result.model_failure = request->model_failure;
         result.execution_failure = request->execution_failure;
+        if (request->context_failure) {
+            result.context_failure = addon::Context_failure{binding->session_id, *request->context_failure};
+        }
+        else if (request->context_state_version == 2) {
+            auto native = read_native_context(binding->transcript, binding->session_id);
+            if (native.update) result.context_updates.push_back(std::move(*native.update));
+            result.context_failure = std::move(native.failure);
+        }
         {
             std::lock_guard lock(mutex);
             result.resume_cursor = cursor(nonce, 'w', binding->produced);
@@ -336,9 +344,10 @@ struct Observer::Impl {
         result.execution_failure = request->execution_failure;
         std::string error;
         const auto nonce = request->correlation->transition_nonce;
+        std::shared_ptr<Binding> binding;
         {
             std::lock_guard lock(mutex);
-            const auto binding = find(nonce);
+            binding = find(nonce);
             const auto index = cursor_index(request->resume_cursor, nonce, 'p');
             if (!binding || binding->session_id.empty()) error = "vibe_correlation_unbound";
             else if (!index || *index < binding->acknowledged || *index > binding->delivered) error = "vibe_observer_cursor_invalid";
@@ -364,13 +373,40 @@ struct Observer::Impl {
                 result.more = !binding->queue.empty() && binding->queue.back().index > last;
             }
         }
-        if (!error.empty()) context.fail(addon::Result_status::UNAVAILABLE, error);
-        else context.succeed(addon::encode_poll_observations_result(result));
+        if (!error.empty()) {
+            context.fail(addon::Result_status::UNAVAILABLE, error);
+            return;
+        }
+        if (request->context_failure) {
+            result.context_failure = addon::Context_failure{binding->session_id, *request->context_failure};
+        }
+        else if (request->context_state_version == 2) {
+            auto native = read_native_context(binding->transcript, binding->session_id);
+            if (native.update) result.context_updates.push_back(std::move(*native.update));
+            result.context_failure = std::move(native.failure);
+        }
+        context.succeed(addon::encode_poll_observations_result(result));
     }
 };
 
 Observer::Observer() : m_impl(std::make_unique<Impl>()) {}
 Observer::~Observer() = default;
+
+Native_context_result Observer::read_context(std::string_view transition_nonce, std::string_view provider_session_id,
+    std::optional<std::uint64_t> count_revision) const
+{
+    std::filesystem::path transcript;
+    {
+        std::lock_guard lock(m_impl->mutex);
+        const auto binding = m_impl->find(transition_nonce);
+        if (!binding || binding->session_id != provider_session_id) {
+            return {std::nullopt, addon::Context_failure{std::string(provider_session_id),
+                addon::Contract_failure{"vibe_context_binding_unavailable", {}}}};
+        }
+        transcript = binding->transcript;
+    }
+    return read_native_context(transcript, provider_session_id, count_revision);
+}
 
 bool Observer::reserved(std::string_view transition_nonce) const
 {

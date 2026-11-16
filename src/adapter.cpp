@@ -60,6 +60,14 @@ void classify(addon::Invocation_context& context, vibe::Observer& observer)
             return;
         }
     }
+    if (request->context_state_version == 2 && !request->context_failure && !result.observations.empty()) {
+        const auto& nonce = result.classification == addon::Classification::TRANSITION ?
+            request->transition_nonce : request->ledger.current_transition->nonce;
+        auto native = observer.read_context(nonce, result.observations.front().provider_session_id,
+            request->context_snapshot_revision);
+        if (native.update) result.context_updates.push_back(std::move(*native.update));
+        result.context_failure = std::move(native.failure);
+    }
     context.succeed(addon::encode_classify_event_result(result));
 }
 
@@ -78,6 +86,7 @@ int main()
         {"lifecycle-correlation-lifetime", 1},
         {"execution-model", 1},
         {"execution-context", 1}, {"model-context-delivery", 2},
+        {"context-state", 2},
         {"interactive-resume", 2}, {"interactive-resume", 3},
     };
     addon::Adapter_runtime runtime(std::move(options));

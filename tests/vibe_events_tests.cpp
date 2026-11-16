@@ -271,6 +271,21 @@ void execution_directory()
         "optional cwd request failure affected lifecycle classification");
 }
 
+void optional_context_failure_scope()
+{
+    auto payload = native_event("pre_agent", k_other_session);
+    auto input = request(compact("pre_agent", payload));
+    input.context_failure = addon::Contract_failure{"unsupported_version", "unsupported context telemetry"};
+    auto result = classify(input);
+    require(result.classification == addon::Classification::IGNORED && result.context_failure &&
+        result.context_failure->provider_session_id == k_other_session,
+        "a delayed optional context failure borrowed the active ledger session");
+    input.event.body = addon::Json_value::object();
+    result = classify(input);
+    require(result.context_failure && result.context_failure->provider_session_id.empty(),
+        "unattributed optional context failure became another session's failure");
+}
+
 void declared_profile(const char* path)
 {
     std::ifstream stream(path, std::ios::binary);
@@ -298,6 +313,7 @@ int main(int argc, char** argv)
         compact_payloads();
         selected_model();
         execution_directory();
+        optional_context_failure_scope();
         std::cout << "Vibe lifecycle contracts passed\n";
         return 0;
     }
