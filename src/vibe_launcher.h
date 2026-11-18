@@ -11,12 +11,25 @@
 
 namespace vibe {
 
-bool interactive_invocation(const std::vector<std::string>& argv);
+struct Interactive_invocation
+{
+    std::vector<std::string> options;
+    bool saved_session = false;
+    bool initial_prompt = false;
+};
+
+struct Native_program
+{
+    std::filesystem::path path;
+    std::string version;
+};
+
+std::optional<Interactive_invocation> interactive_invocation(const std::vector<std::string>& argv);
 bool supported_version(std::string_view version);
 std::optional<std::filesystem::path> resolve_home(
     const logonomic::cli_addon::Environment& environment, std::string_view working_directory);
-std::optional<std::filesystem::path> verified_program(
-    const std::vector<std::string>& argv,
+std::optional<Native_program> verified_program(
+    std::string_view executable,
     const logonomic::cli_addon::Environment& environment, std::string_view working_directory,
     logonomic::cli_addon::Invocation_context& context);
 std::optional<std::string> hook_executable();

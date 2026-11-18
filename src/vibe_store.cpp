@@ -414,7 +414,7 @@ Native_projection_result read_native_projection(
 
 bool native_child_active(Native_child_state state)
 {
-    return state == Native_child_state::reserved || state == Native_child_state::running;
+    return state == Native_child_state::running || state == Native_child_state::deleting_running;
 }
 
 std::string_view native_child_state_name(Native_child_state state)

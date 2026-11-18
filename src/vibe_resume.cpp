@@ -144,14 +144,14 @@ void prepare(addon::Invocation_context& context)
     }
     const auto invocation = addon::literal_launcher_invocation(request->context.launcher,
         request->context.launch_environment->platform_id, request->context.launcher_argv);
-    const auto arguments = invocation ? resume_arguments(invocation->argv) : std::nullopt;
-    if (!arguments) {
+    const auto parsed = invocation ? interactive_invocation(invocation->argv) : std::nullopt;
+    if (!parsed) {
         context.fail(addon::Result_status::UNAVAILABLE, "vibe_resume_launcher_unavailable");
         return;
     }
     const auto environment = addon::environment_pairs(request->context.launch_environment->effective_environment);
-    const auto program = verified_program(invocation->argv, environment, request->context.working_directory, context);
-    if (!program) {
+    const auto program = verified_program(invocation->argv.front(), environment, request->context.working_directory, context);
+    if (!program || !supported_version(program->version)) {
         context.fail(context.cancel_requested() ? addon::Result_status::CANCELLED : addon::Result_status::UNAVAILABLE,
             context.cancel_requested() ? "cancelled" : "vibe_hooks_version_unavailable");
         return;
@@ -167,8 +167,8 @@ void prepare(addon::Invocation_context& context)
 #else
     result.process.executable = "helpers/vibe_launch_bridge";
 #endif
-    result.process.argv = {addon::path_to_utf8(*program)};
-    result.process.argv.insert(result.process.argv.end(), arguments->begin(), arguments->end());
+    result.process.argv = {addon::path_to_utf8(program->path)};
+    result.process.argv.insert(result.process.argv.end(), parsed->options.begin(), parsed->options.end());
     result.process.argv.insert(result.process.argv.end(), {"--resume", record->session_id});
     result.process.stdin_behavior = addon::Stdin_behavior::INHERIT;
     result.process.cleanup = addon::Cleanup_intent::RETAIN_SCRATCH;
@@ -203,27 +203,6 @@ std::optional<Resume_record> decode_resume_record(const addon::Json_value& recor
     if (!home_path || !transcript_path || transcript_path->filename() != addon::path_from_utf8(*session_id) ||
         transcript_path->parent_path().filename() != "unified") return std::nullopt;
     return Resume_record{*session_id, *home_path, *transcript_path};
-}
-
-std::optional<std::vector<std::string>> resume_arguments(const std::vector<std::string>& invocation)
-{
-    if (!interactive_invocation(invocation)) return std::nullopt;
-    std::vector<std::string> arguments;
-    for (std::size_t index = 1; index < invocation.size(); ++index) {
-        const auto& arg = invocation[index];
-        if (arg == "--") break; // The original launch's prompt is not sent twice.
-        if (arg == "--continue" || arg == "-c" || arg.starts_with("--resume=")) continue;
-        if (arg == "--resume") {
-            if (index + 1 < invocation.size() && !invocation[index + 1].starts_with('-')) ++index;
-            continue;
-        }
-        if (arg == "--agent" || arg == "--add-dir") {
-            arguments.push_back(arg);
-            arguments.push_back(invocation[++index]);
-        }
-        else if (arg.starts_with('-')) arguments.push_back(arg);
-    }
-    return arguments;
 }
 
 addon::Resume_availability inspect_native_session(const Resume_record& record)

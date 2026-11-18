@@ -65,7 +65,7 @@ void child_states()
         require(vibe::native_child_state_name(actual.state) == name, "native child outcome changed meaning");
         require(actual.name == "探索者-1" && actual.agent_type == "researcher", "assigned name conflated with profile");
         require(vibe::native_child_active(actual.state) == (std::string_view(name) == "running" ||
-            std::string_view(name) == "reserved"), "nonrunning child remained active");
+            std::string_view(name) == "deleting_running"), "child activity disagreed with the native active turn");
     }
     auto state = runtime();
     set_child(state, child("idle"));

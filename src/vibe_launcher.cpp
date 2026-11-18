@@ -12,39 +12,79 @@ namespace vibe {
 namespace addon = logonomic::cli_addon;
 namespace fs = std::filesystem;
 
-bool interactive_invocation(const std::vector<std::string>& argv)
+std::optional<Interactive_invocation> interactive_invocation(const std::vector<std::string>& argv)
 {
-    if (argv.empty()) return false;
+    if (argv.empty()) {
+        return std::nullopt;
+    }
     const auto name = addon::lower(addon::base_name(argv.front()));
-    if (name != "vibe" && name != "vibe.exe") return false;
-    bool prompt = false;
+    if (name != "vibe" && name != "vibe.exe") {
+        return std::nullopt;
+    }
+    Interactive_invocation result;
+    bool continue_session = false;
+    bool resume_session = false;
     for (std::size_t index = 1; index < argv.size(); ++index) {
         const auto& arg = argv[index];
-        if (arg == "--") return !prompt && index + 2 == argv.size();
-        if (arg == "--agent" || arg == "--add-dir") {
-            if (++index == argv.size() || argv[index].empty()) return false;
+        if (arg == "--") {
+            if (index + 1 < argv.size()) {
+                if (result.initial_prompt || index + 2 != argv.size()) {
+                    return std::nullopt;
+                }
+                result.initial_prompt = true;
+            }
+            break;
         }
-        else if (arg.starts_with("--agent=") || arg.starts_with("--add-dir=")) {
-            if (arg.back() == '=') return false;
+        const auto equal = arg.find('=');
+        const auto option = std::string_view(arg).substr(0, equal);
+        if (option == "--agent" || option == "--add-dir" || option == "--enabled-tools" || option == "--disabled-tools") {
+            result.options.push_back(arg);
+            if (equal == std::string::npos) {
+                if (++index == argv.size() || argv[index].empty() ||
+                    (argv[index].size() > 1 && argv[index].front() == '-'))
+                {
+                    return std::nullopt;
+                }
+                result.options.push_back(argv[index]);
+            }
+            else
+            if (equal + 1 == arg.size()) {
+                return std::nullopt;
+            }
         }
-        else if (arg == "--resume") {
-            if (index + 1 < argv.size() && !argv[index + 1].starts_with('-')) ++index;
+        else
+        if (option == "--resume") {
+            if (continue_session || (equal != std::string::npos && equal + 1 == arg.size())) {
+                return std::nullopt;
+            }
+            resume_session = true;
+            result.saved_session = true;
+            if (equal == std::string::npos && index + 1 < argv.size() && !argv[index + 1].starts_with('-')) {
+                ++index;
+            }
         }
-        else if (arg.starts_with("--resume=")) {
-            if (arg.back() == '=') return false;
+        else
+        if (arg == "--continue" || arg == "-c") {
+            if (resume_session) {
+                return std::nullopt;
+            }
+            continue_session = true;
+            result.saved_session = true;
         }
-        else if (arg == "--continue" || arg == "-c" || arg == "--auto-approve" ||
-            arg == "--yolo" || arg == "--smart-approve" || arg == "--trust") {
-        }
-        else if (arg.starts_with('-') || arg == "mcp" || arg == "config" ||
-            arg == "update" || arg == "run-server" || prompt) {
-            return false;
+        else
+        if (arg == "--auto-approve" || arg == "--yolo" || arg == "--smart-approve" || arg == "--trust") {
+            result.options.push_back(arg);
         }
         else {
-            prompt = true;
+            if ((arg.size() > 1 && arg.front() == '-') || arg == "mcp" || arg == "config" ||
+                arg == "update" || arg == "run-server" || result.initial_prompt)
+            {
+                return std::nullopt;
+            }
+            result.initial_prompt = true;
         }
     }
-    return true;
+    return result;
 }
 
 bool supported_version(std::string_view version)
@@ -87,11 +127,13 @@ std::optional<fs::path> resolve_home(const addon::Environment& environment, std:
     return canonical;
 }
 
-std::optional<fs::path> verified_program(const std::vector<std::string>& argv,
+std::optional<Native_program> verified_program(std::string_view executable,
     const addon::Environment& environment, std::string_view working_directory, addon::Invocation_context& context)
 {
-    if (!interactive_invocation(argv) || context.cancel_requested()) return std::nullopt;
-    const auto program = addon::resolve_program(argv.front(), environment, working_directory);
+    if (context.cancel_requested()) {
+        return std::nullopt;
+    }
+    const auto program = addon::resolve_program(executable, environment, working_directory);
     if (!program) return std::nullopt;
 #ifdef _WIN32
     if (!addon::native_image(*program)) return std::nullopt;
@@ -105,7 +147,10 @@ std::optional<fs::path> verified_program(const std::vector<std::string>& argv,
     if (!stdout_version || !stderr_version ||
         (!stdout_version->empty() && !stderr_version->empty() && *stdout_version != *stderr_version)) return std::nullopt;
     const auto& version = stdout_version->empty() ? *stderr_version : *stdout_version;
-    return supported_version(version) ? program : std::nullopt;
+    if (version.empty()) {
+        return std::nullopt;
+    }
+    return Native_program{*program, version};
 }
 
 std::optional<std::string> hook_executable()
@@ -123,23 +168,6 @@ std::optional<std::string> hook_executable()
 }
 
 namespace {
-
-bool selects_saved_session(const std::vector<std::string>& argv)
-{
-    // Called only after interactive_invocation has validated the option shape.
-    for (std::size_t index = 1; index < argv.size(); ++index) {
-        const auto& arg = argv[index];
-        if (arg == "--") return false;
-        if (arg == "--agent" || arg == "--add-dir") {
-            ++index;
-        }
-        else if (arg == "--resume" || arg.starts_with("--resume=") ||
-            arg == "--continue" || arg == "-c") {
-            return true;
-        }
-    }
-    return false;
-}
 
 void reject(addon::Invocation_context& context, const addon::Contract_failure& error)
 {
@@ -212,28 +240,28 @@ void prepare(addon::Invocation_context& context)
     const auto invocation = addon::literal_launcher_invocation(request->launcher,
         request->launch_environment->platform_id, request->launcher_argv);
     patch.disposition = addon::Launch_disposition{false, false, false};
-    if (!invocation || !interactive_invocation(invocation->argv)) {
-        context.succeed(addon::encode_launch_patch(patch, 3));
-        return;
-    }
+    const auto parsed = invocation ? interactive_invocation(invocation->argv) : std::nullopt;
     const auto environment = addon::environment_pairs(request->launch_environment->effective_environment);
     // Native startup resume can restore another cwd and configuration context.
     // Leave it and explicit cwd overrides unmanaged; exact host resume is
     // verified separately against its saved record and selected directory.
-    if (selects_saved_session(invocation->argv) ||
+    if (!parsed || parsed->saved_session ||
         !addon::environment_value(environment, "VIBE_CWD").empty()) {
+        context.succeed(addon::encode_launch_patch(patch, 3));
+        return;
+    }
+    const auto program = verified_program(invocation->argv.front(), environment, request->working_directory, context);
+    if (context.cancel_requested()) {
+        context.fail(addon::Result_status::CANCELLED, "cancelled");
+        return;
+    }
+    if (!program || !supported_version(program->version)) {
         context.succeed(addon::encode_launch_patch(patch, 3));
         return;
     }
     const auto home = resolve_home(environment, request->working_directory);
     if (!home) {
         context.fail(addon::Result_status::UNAVAILABLE, "vibe_home_unavailable");
-        return;
-    }
-    if (!verified_program(invocation->argv, environment, request->working_directory, context)) {
-        context.fail(context.cancel_requested() ? addon::Result_status::CANCELLED : addon::Result_status::UNAVAILABLE,
-            context.cancel_requested() ? "cancelled" : "vibe_hooks_version_unavailable",
-            "Mistral Vibe 3.1.1 or newer is required for native lifecycle hooks.");
         return;
     }
     const auto helper = hook_executable();

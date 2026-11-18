@@ -13,11 +13,11 @@ void require(bool value, const char* message)
 int main()
 {
     using vibe::interactive_invocation;
-    require(interactive_invocation({"vibe"}), "plain native launcher");
-    require(interactive_invocation({"/opt/with spaces/vibe", "--agent", "ask", "initial prompt"}), "agent and prompt");
-    require(interactive_invocation({"C:\\Tools\\vibe.exe", "--resume", "session-id"}), "exact resume");
-    require(interactive_invocation({"vibe", "--resume"}), "native resume picker");
-    require(interactive_invocation({"vibe", "--", "--literal prompt"}), "literal option-shaped prompt");
+    require(interactive_invocation({"vibe"}).has_value(), "plain native launcher");
+    require(interactive_invocation({"/opt/with spaces/vibe", "--agent", "ask", "initial prompt"}).has_value(), "agent and prompt");
+    require(interactive_invocation({"C:\\Tools\\vibe.exe", "--resume", "session-id"}).has_value(), "exact resume");
+    require(interactive_invocation({"vibe", "--resume"}).has_value(), "native resume picker");
+    require(interactive_invocation({"vibe", "--", "--literal prompt"}).has_value(), "literal option-shaped prompt");
     require(!interactive_invocation({"other", "vibe"}), "unrelated command");
     require(!interactive_invocation({"vibe", "-p", "prompt"}), "headless invocation");
     require(!interactive_invocation({"vibe", "config", "list"}), "configuration command");

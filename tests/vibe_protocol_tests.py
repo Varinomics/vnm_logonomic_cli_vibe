@@ -349,8 +349,9 @@ class ProtocolTests(unittest.TestCase):
         environment["MISTRAL_API_KEY"] = "dummy-structured-probe-key"
         request = self.preparation_request(executable, environment)
         request.pop("title_instruction")
-        request["launcher"]["script_body"] = f'"{executable}" --agent ask'
-        request["launcher_argv"] = [str(executable), "--agent", "ask"]
+        options = ["--agent", "ask", "--enabled-tools", "read_file", "--disabled-tools=bash"]
+        request["launcher"]["script_body"] = f'"{executable}" ' + " ".join(options)
+        request["launcher_argv"] = [str(executable), *options]
         prompt = 'Implement the requested change with "quotes" and λ.\nKeep $(literal) text.'
         request.update(purpose="read_only_review", prompt_base64=base64.b64encode(prompt.encode("utf-8")).decode("ascii"))
 
@@ -363,7 +364,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(result["profile_storage"], request["profile_storage"])
         process = result["process"]
         self.assertEqual(process["executable"], {"launcher_program": True})
-        self.assertEqual(process["argv"], ["--agent", "ask", "--output", "streaming", "-p"])
+        self.assertEqual(process["argv"], [*options, "--output", "streaming", "-p"])
         self.assertEqual(process["working_directory"], "session_workspace")
         self.assertEqual(process["start"], "attached")
         self.assertEqual(process["stdin"], "payload")
@@ -441,6 +442,8 @@ class ProtocolTests(unittest.TestCase):
     def test_recognition_does_not_claim_another_cli(self):
         self.assertTrue(self.recognize("vibe")["recognized"])
         self.assertTrue(self.recognize("vibe --agent plan")["recognized"])
+        self.assertTrue(self.recognize("vibe --enabled-tools read_file --disabled-tools=bash")["recognized"])
+        self.assertFalse(self.recognize("vibe --agent --trust")["recognized"])
         self.assertEqual(self.recognize("python"), {"recognized": False})
         self.assertEqual(self.recognize("vibe-other"), {"recognized": False})
         self.assertEqual(self.recognize("echo vibe", "bash"), {"recognized": False})
@@ -483,14 +486,10 @@ class ProtocolTests(unittest.TestCase):
 
     def test_old_vibe_does_not_receive_hooks_it_cannot_execute(self):
         executable, environment = self.installed_cli("3.1.0")
-        result = self.adapter.invoke("launch-preparation", 3, "prepare",
-                                     self.preparation_request(executable, environment))
-        if result["status"] == "success":
-            patch = result["payload"]
-            self.assertFalse(patch["disposition"]["lifecycle_events"], patch)
-            self.assertFalse(patch.get("apply_managed_configuration", False), patch)
-        else:
-            self.assertEqual(result["status"], "unavailable", result)
+        patch = self.success("launch-preparation", 3, "prepare", self.preparation_request(executable, environment))
+        self.assertFalse(patch["disposition"]["prepared"], patch)
+        self.assertFalse(patch["disposition"]["lifecycle_events"], patch)
+        self.assertFalse(patch.get("apply_managed_configuration", False), patch)
         self.assertFalse((executable.parent / "unexpected-launch.txt").exists())
 
     def test_initial_native_resume_selectors_remain_unmanaged(self):
@@ -601,7 +600,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(self.inspect_resume(request)["availability"], "available")
         for previous in (["--continue"], ["--resume", "outdated"], ["--resume=outdated"]):
             with self.subTest(previous=previous):
-                preserved = ["--agent", "plan", "--auto-approve", "--add-dir", str(self.workspace)]
+                preserved = ["--agent", "plan", "--auto-approve", "--add-dir", str(self.workspace),
+                             "--enabled-tools", "read_file", "--disabled-tools=bash", "--disabled-tools", "write_file"]
                 arguments = [str(executable), *preserved, *previous, "old startup prompt"]
                 request["launcher"]["script_body"] = " ".join(f'"{argument}"' for argument in arguments)
                 request["launcher_argv"] = arguments

@@ -69,17 +69,15 @@ addon::Lifecycle_observation child_observation(std::string_view owner, const Nat
     result.provider_session_id = owner;
     // Vibe keeps one child session across successive runs. Use the native turn
     // identity for its public execution span, so a stopped span cannot be
-    // resurrected by a later message to the same child. A reserved spawn is
-    // always generation one in Vibe's durable SpawnTarget contract.
-    const auto run_id = child.turn_id.empty() ? child.session_id + ":turn:1" : child.turn_id;
-    result.agent_id = run_id.size() <= 256 ? run_id : "vibe-child-run:" + addon::to_hex(addon::Sha256::digest(run_id));
+    // resurrected by a later message to the same child.
+    result.agent_id = child.turn_id;
     result.agent_label = label(child.name);
     result.subagent_transition = started ? addon::Subagent_transition::STARTED : addon::Subagent_transition::STOPPED;
     // This is an observed child activity fact, not an outcome of the root turn.
     // The host's root phase/outcome fields deliberately stay neutral.
     std::string identity;
     for (const auto value : {owner, std::string_view(child.session_id), std::string_view(child.spawn_action_id),
-            std::string_view(run_id), state_name}) {
+            std::string_view(child.turn_id), state_name}) {
         identity.append(value);
         identity.push_back('\0');
     }
@@ -96,7 +94,7 @@ std::vector<addon::Lifecycle_observation> differences(std::string_view owner,
         const auto* old = found == previous.end() ? nullptr : &found->second;
         const bool was_active = old && native_child_active(old->state);
         const bool active = native_child_active(child.state);
-        const auto old_generation = old ? old->turn_generation.value_or(1) : 0;
+        const auto old_generation = old ? old->turn_generation.value_or(0) : 0;
         const bool later_run = child.turn_generation && *child.turn_generation > old_generation;
         if (active && !was_active) {
             result.push_back(child_observation(owner, child, true, native_child_state_name(child.state)));
@@ -106,13 +104,9 @@ std::vector<addon::Lifecycle_observation> differences(std::string_view owner,
                 result.push_back(child_observation(owner, *old, false, "turn_advanced"));
                 result.push_back(child_observation(owner, child, true, "recorded_run"));
             }
-            auto stopped = child;
             // Tombstones/deletion records no longer retain a turn. Their stop
             // belongs to the exact execution this observer previously started.
-            if (stopped.turn_id.empty()) {
-                stopped.turn_id = old->turn_id;
-                stopped.turn_generation = old->turn_generation;
-            }
+            const auto& stopped = child.turn_id.empty() ? *old : child;
             result.push_back(child_observation(owner, stopped, false, native_child_state_name(child.state)));
         }
         else if (!initial && !active && later_run) {

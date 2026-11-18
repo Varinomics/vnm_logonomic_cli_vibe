@@ -212,7 +212,7 @@ void preparation_boundaries(const fs::path& fake_cli)
     require(task.prepare().reason == "vibe_task_prompt_invalid", "empty native prompt was launched");
     task.input.prompt = "valid";
     write(task.directory.root / "fake-version.txt", "3.1.1\n");
-    require(task.prepare().reason == "vibe_task_version_unavailable", "unqualified older stream was launched");
+    require(task.prepare().success, "version alone refused the native stream");
 }
 
 void incremental_completion(const fs::path& fake_cli)

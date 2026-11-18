@@ -348,7 +348,7 @@ def create_host_fixture(path, deliveries):
 
 
 def isolated_environment(home, native_home, vibe):
-    return {
+    environment = {
         "PATH": str(vibe.parent) + os.pathsep + os.defpath,
         "HOME": str(home), "USERPROFILE": str(home), "VIBE_HOME": str(native_home),
         "MISTRAL_API_KEY": "fake-key", "TERM": "xterm-256color", "LANG": "C.UTF-8",
@@ -359,6 +359,15 @@ def isolated_environment(home, native_home, vibe):
         "ALL_PROXY": "http://127.0.0.1:9", "NO_PROXY": "127.0.0.1,localhost",
         "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull,
     }
+    if os.name == "nt":
+        system = Path(os.environ["SystemRoot"]) / "System32"
+        environment.update({
+            "SystemRoot": os.environ["SystemRoot"], "COMSPEC": str(system / "cmd.exe"),
+            "PATH": os.pathsep.join(map(str, [vibe.parent, system, system / "WindowsPowerShell" / "v1.0"])),
+            "PATHEXT": ".COM;.EXE;.BAT;.CMD", "LOCALAPPDATA": str(home / "AppData" / "Local"),
+            "APPDATA": str(home / "AppData" / "Roaming"), "TMP": str(home), "TEMP": str(home),
+        })
+    return environment
 
 
 def run(arguments):

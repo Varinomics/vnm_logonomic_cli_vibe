@@ -214,6 +214,7 @@ void child_runs_and_cursors()
     set_child(state, child("reserved"));
     store.publish(state);
     bind(observer, store);
+    require(page(poll(observer)).observations.empty(), "reservation published a running child before native execution");
     auto watch = observation(store);
     const std::vector<std::pair<std::string, std::uint64_t>> changes = {
         {"running", 1}, {"idle", 1}, {"running", 2}, {"interrupted", 2},
@@ -237,7 +238,7 @@ void child_runs_and_cursors()
     require(repeated.output == first_call.output, "retry consumed an unacknowledged page");
     require(first.more && first.observations.size() == 2, "bounded page did not retain remaining observations");
     require(first.observations[0].agent_id == "child-one:turn:1" &&
-        first.observations[1].agent_id == "child-one:turn:1", "reserved and completed first run lost their shared identity");
+        first.observations[1].agent_id == "child-one:turn:1", "running and completed first run lost their shared identity");
     require(first.observations[1].provider_event_name == "vibe_subagent_idle", "completed child lost its observed native state");
     std::vector<addon::Lifecycle_observation> all = first.observations;
     auto next_cursor = first.resume_cursor;
@@ -258,6 +259,7 @@ void child_runs_and_cursors()
     }
     require(all[3].provider_event_name == "vibe_subagent_interrupted" && all[5].provider_event_name == "vibe_subagent_turn_failed",
         "interrupted and failed children were reported as success");
+    require(all[7].provider_event_name == "vibe_subagent_tombstone", "a request to close a running child ended it too early");
     const auto empty = page(poll(observer, next_cursor));
     require(empty.observations.empty() && !empty.more, "acknowledged observations stayed queued");
     require(!poll(observer).success, "expired consumption cursor silently rewound the queue");
@@ -269,6 +271,35 @@ void child_runs_and_cursors()
     reserve(observer, k_other_nonce);
     require(observer.bind(k_other_nonce, "root-session", store.transcript), "second independent context did not bind");
     require(!poll(observer, next_cursor, 16, k_other_nonce).success, "cursor crossed authenticated correlations");
+}
+
+void reserved_child_outcomes()
+{
+    for (const auto* terminal : {"creation_failed", "idle"}) {
+        Store_fixture store;
+        vibe::Observer observer;
+        auto state = runtime();
+        set_child(state, child("reserved"));
+        store.publish(state);
+        bind(observer, store);
+        set_child(state, child(terminal));
+        store.publish(state);
+        auto watch = observation(store);
+        observer.handle_observation(watch);
+        require(watch.success, "failed to read the native state after reservation");
+        const auto result = page(poll(observer));
+        if (std::string_view(terminal) == "creation_failed") {
+            require(result.observations.empty(), "a failed reservation produced an execution span");
+        }
+        else {
+            require(result.observations.size() == 2 &&
+                result.observations.front().subagent_transition == addon::Subagent_transition::STARTED &&
+                result.observations.back().subagent_transition == addon::Subagent_transition::STOPPED &&
+                result.observations.front().agent_id == "child-one:turn:1" &&
+                result.observations.back().agent_id == "child-one:turn:1",
+                "the first settled native turn after reservation lost its execution span");
+        }
+    }
 }
 
 void state_gaps_and_forks()
@@ -398,6 +429,7 @@ int main()
 {
     try {
         child_runs_and_cursors();
+        reserved_child_outcomes();
         state_gaps_and_forks();
         unavailable_and_retirement();
         labels();

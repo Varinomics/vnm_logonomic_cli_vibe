@@ -89,9 +89,13 @@ def run_case(case, root, adapter, harness, native, vibe, source_fixtures):
         path.mkdir()
     native_home = home / ".vibe"
     marker = directory / "foreground-hook-ran"
-    poison_hook = directory / "foreground-hook"
-    poison_hook.write_text("#!/bin/sh\nprintf called > " + shlex.quote(str(marker)) + "\n", encoding="utf-8")
-    poison_hook.chmod(0o700)
+    if os.name == "nt":
+        poison_hook = directory / "foreground-hook.cmd"
+        poison_hook.write_text(f'@echo called > "{marker}"\n', encoding="utf-8")
+    else:
+        poison_hook = directory / "foreground-hook"
+        poison_hook.write_text("#!/bin/sh\nprintf called > " + shlex.quote(str(marker)) + "\n", encoding="utf-8")
+        poison_hook.chmod(0o700)
     environment = native.isolated_environment(home, native_home, vibe)
     environment["VNM_VIBE_HOOK"] = str(poison_hook)
 
@@ -99,7 +103,7 @@ def run_case(case, root, adapter, harness, native, vibe, source_fixtures):
         if case == "approval-denied" and index == 0:
             return single_tool_call_chunks(
                 call_id="owned-denied-tool", tool_name="bash",
-                arguments={"command": "touch must-not-exist.txt"})
+                arguments={"command": "echo unexpected > must-not-exist.txt"})
         if case == "refused":
             return [
                 StreamingMockServer.build_chunk(
@@ -122,6 +126,8 @@ def run_case(case, root, adapter, harness, native, vibe, source_fixtures):
         (native_home / "hooks.toml").write_bytes(base64.b64decode(
             transformed["payload"]["content_base64"], validate=True))
         argv = [str(vibe), "--agent", "ask", "--trust"]
+        if case == "success":
+            argv.extend(["--enabled-tools", "read_file", "--disabled-tools=todo"])
         request = {
             "purpose": "implementation",
             "launcher": {
@@ -137,7 +143,7 @@ def run_case(case, root, adapter, harness, native, vibe, source_fixtures):
         prepared = success(adapter, "prepare", request)
         process = prepared["process"]
         require(process["executable"] == {"launcher_program": True} and
-                process["argv"] == ["--agent", "ask", "--trust", "--output", "streaming", "-p"] and
+                process["argv"] == [*argv[1:], "--output", "streaming", "-p"] and
                 process["stdin"] == "payload" and process["stdin_payload"] == PROMPT.strip() and
                 process["start"] == "attached" and process["working_directory"] == "session_workspace",
                 "Owned process changed launcher policy, input channel, or native workspace")
@@ -168,6 +174,10 @@ def run_case(case, root, adapter, harness, native, vibe, source_fixtures):
         require(not (workspace / "must-not-exist.txt").exists(), "Native task bypassed configured tool approval")
         require(server.requests and all(value == "Bearer fake-key" for value in server.authorizations),
                 "Native model did not use the local dummy-key fixture")
+        if case == "success":
+            names = {tool["function"]["name"] for tool in server.requests[0]["tools"]}
+            require("read_file" in names and "todo" not in names,
+                    "Native model did not receive the configured optional tool filter")
         require(all(str(request_body.get("model")) == "mock-model" for request_body in server.requests),
                 "Native selected model changed")
         entries = [json.loads(line) for line in completed.stdout.splitlines()]
@@ -223,7 +233,6 @@ def run_case(case, root, adapter, harness, native, vibe, source_fixtures):
 
 
 def run(arguments):
-    require(os.name == "posix", "This native qualification uses POSIX hook fixtures")
     root = arguments.output_directory.resolve()
     root.mkdir(parents=True, exist_ok=False)
     vibe = arguments.vibe.absolute()

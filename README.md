@@ -61,6 +61,8 @@ vibe
 
 The adapter accepts literal interactive invocations with an initial prompt,
 `--agent`, `--add-dir`, `--auto-approve`/`--yolo`, `--smart-approve`, and `--trust`.
+It preserves native `--enabled-tools` and `--disabled-tools` selections, including
+repeated flags, for interactive launches, exact resumes, and implementation tasks.
 Exact remembered-session resume replaces an old resume/continue selector and
 removes the original startup prompt so it is not submitted a second time.
 
@@ -187,7 +189,7 @@ and compaction-count authority.
 ### Owned implementation tasks
 
 Logonomic can prepare a fresh Vibe implementation task through
-`structured-session@3`, requiring Vibe 3.1.2 or newer. The host owns the attached
+`structured-session@3`, using the native streaming format qualified with Vibe 3.1.2. The host owns the attached
 process, deadline, output, and cancellation. The provider passes the prompt on
 stdin with native streaming output enabled, preserves the selected agent and
 approval options, and uses the frozen launcher environment. The prompt is not
@@ -284,8 +286,6 @@ index. Standalone MSVC builds use the static C++ runtime. Embedded builds use
 the SDK and runtime policy supplied by their parent project.
 
 The SDK supports Linux x86_64, Windows x86_64, and macOS arm64 package targets.
-Actual Windows/macOS execution still requires the CI qualification described
-below.
 
 ## Tests and qualification
 
@@ -309,7 +309,7 @@ excludes hidden model guidance. The scripted endpoint establishes native
 transport and data behavior; it does not establish that a model obeys title or
 summary instructions. No paid model backend is needed by this qualification.
 
-The separate owned-task qualification uses the same native version and local
+The headless owned-task qualification runs on Windows and Linux with the same native version and local
 endpoint for successful completion, an actual native model refusal, and a tool
 approval denied by the native `ask` policy. In the last case, Vibe emits a
 plausible answer and exits zero; the add-on still returns
@@ -321,9 +321,8 @@ owned process, and the public prompt retains its exact normalized content.
 Run `tests/vibe_native_qualification.py --help` or
 `tests/vibe_native_tasks_qualification.py --help` for the installed executable,
 matching upstream test-source checkout, built package, and fresh evidence
-directory inputs. These provider qualifications do not exercise the Logonomic
-desktop UI. Windows/macOS native execution and live account/quota behavior
-remain outside the completed Linux qualification.
+directory inputs. The package protocol fixture and real native CLI are separate
+checks. The headless test uses an isolated profile and a loopback model endpoint.
 
 Upstream source observation is recorded in
 [`package/provenance/upstream_contract.json`](package/provenance/upstream_contract.json).

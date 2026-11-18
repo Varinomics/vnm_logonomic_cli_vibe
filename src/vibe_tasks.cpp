@@ -123,61 +123,6 @@ std::optional<Task_state> decode_state(std::string_view encoded)
     return state;
 }
 
-bool supported_task_version(std::string_view version)
-{
-    if (!addon::is_semantic_version(version)) return false;
-    const auto suffix = version.find_first_of("-+");
-    auto components = version.substr(0, suffix);
-    for (const std::string_view minimum : {"3", "1", "2"}) {
-        const auto dot = components.find('.');
-        const auto component = components.substr(0, dot);
-        if (component.size() != minimum.size()) return component.size() > minimum.size();
-        if (component != minimum) return component > minimum;
-        components = dot == std::string_view::npos ? std::string_view{} : components.substr(dot + 1);
-    }
-    return suffix == std::string_view::npos || version[suffix] == '+';
-}
-
-bool fresh_invocation(const std::vector<std::string>& argv)
-{
-    if (!interactive_invocation(argv)) return false;
-    for (std::size_t index = 1; index < argv.size(); ++index) {
-        const auto& argument = argv[index];
-        if (argument == "--agent" || argument == "--add-dir") {
-            ++index;
-        }
-        else if (argument.starts_with("--agent=") || argument.starts_with("--add-dir=") ||
-            argument == "--auto-approve" || argument == "--yolo" ||
-            argument == "--smart-approve" || argument == "--trust") {
-        }
-        else {
-            // A saved-session selector or a second initial prompt would change
-            // the task's identity, cwd, configuration or submitted input.
-            return false;
-        }
-    }
-    return true;
-}
-
-bool task_program(const std::vector<std::string>& argv, const addon::Environment& environment,
-    std::string_view working_directory, addon::Invocation_context& context)
-{
-    const auto program = addon::resolve_program(argv.front(), environment, working_directory);
-    if (!program) return false;
-#ifdef _WIN32
-    if (!addon::native_image(*program)) return false;
-#endif
-    const auto output = addon::probe({addon::path_to_utf8(*program), "--version"},
-        environment, working_directory, 5000, context);
-    if (!output) return false;
-    constexpr std::string_view labels[] = {"vibe", "mistral-vibe", "mistral vibe"};
-    const auto stdout_version = addon::parse_version_stream(output->output, labels);
-    const auto stderr_version = addon::parse_version_stream(output->errors, labels);
-    if (!stdout_version || !stderr_version ||
-        (!stdout_version->empty() && !stderr_version->empty() && *stdout_version != *stderr_version)) return false;
-    return supported_task_version(stdout_version->empty() ? *stderr_version : *stdout_version);
-}
-
 void reject(addon::Invocation_context& context, const addon::Contract_failure& error)
 {
     context.fail(addon::Result_status::FAILED, error.reason_code, error.detail);
@@ -205,7 +150,8 @@ void prepare(addon::Invocation_context& context)
     const auto invocation = addon::literal_launcher_invocation(source.launcher,
         source.launch_environment->platform_id, source.launcher_argv);
     const auto environment = addon::environment_pairs(source.launch_environment->effective_environment);
-    if (!invocation || !fresh_invocation(invocation->argv) ||
+    const auto parsed = invocation ? interactive_invocation(invocation->argv) : std::nullopt;
+    if (!parsed || parsed->initial_prompt || parsed->saved_session ||
         !addon::environment_value(environment, "VIBE_CWD").empty()) {
         context.fail(addon::Result_status::UNAVAILABLE, "vibe_task_launcher_unavailable");
         return;
@@ -215,16 +161,16 @@ void prepare(addon::Invocation_context& context)
         context.fail(addon::Result_status::FAILED, "vibe_task_prompt_invalid");
         return;
     }
-    if (!task_program(invocation->argv, environment, source.working_directory, context)) {
+    if (!verified_program(invocation->argv.front(), environment, source.working_directory, context)) {
         context.fail(context.cancel_requested() ? addon::Result_status::CANCELLED : addon::Result_status::UNAVAILABLE,
             context.cancel_requested() ? "cancelled" : "vibe_task_version_unavailable",
-            "Mistral Vibe 3.1.2 or newer is required for the qualified headless stream.");
+            "The selected Mistral Vibe executable could not be verified.");
         return;
     }
     addon::Structured_prepare_result result;
     result.profile_storage = source.profile_storage;
     result.process.executable = addon::Process_executable::launcher_program();
-    result.process.argv.assign(invocation->argv.begin() + 1, invocation->argv.end());
+    result.process.argv = parsed->options;
     result.process.argv.insert(result.process.argv.end(), {"--output", "streaming", "-p"});
     result.process.stdin_behavior = addon::Stdin_behavior::PAYLOAD;
     result.process.stdin_payload = *prompt;
