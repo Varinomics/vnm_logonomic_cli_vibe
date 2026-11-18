@@ -23,14 +23,16 @@ public:
     bool cancelled = false;
     std::string reason;
     unsigned waits = 0;
+    int last_wait_ms = 0;
     unsigned stop_after = 1;
     std::function<void(unsigned)> on_wait;
     std::vector<std::uint64_t> progress;
 
     const addon::Invoke_request& request() const override { return input; }
     bool cancel_requested() const override { return cancelled; }
-    bool wait_for_cancel(int) override
+    bool wait_for_cancel(int wait_ms) override
     {
+        last_wait_ms = wait_ms;
         ++waits;
         if (on_wait) on_wait(waits);
         if (waits >= stop_after) cancelled = true;
@@ -353,6 +355,27 @@ void state_gaps_and_forks()
     require(result.observations[3].agent_id == "child-one:turn:3", "tombstone stopped the wrong child run");
 }
 
+void check_held_watch_retirement(vibe::Observer& observer, const Store_fixture& store)
+{
+    auto active = observation(store);
+    active.stop_after = 3;
+    active.on_wait = [&](unsigned count) {
+        if (count != 1) return;
+        Invocation retire;
+        retire.input.operation = "retire";
+        retire.input.payload = addon::encode_lifecycle_correlation_retire_request({
+            {std::string(k_nonce)}, addon::Lifecycle_correlation_retire_disposition::ABANDONED, std::nullopt});
+        observer.handle_lifetime(retire);
+        require(retire.success, "active observer could not be retired");
+        observer.handle_lifetime(retire);
+        require(retire.success, "repeated retirement was not idempotent");
+    };
+    observer.handle_observation(active);
+    require(active.done && active.waits == 1 && !observer.reserved(k_nonce), "retirement did not end the held watch");
+    require(active.last_wait_ms <= 250, "held watch blocked retirement until the full observation deadline");
+    require(!poll(observer).success, "retired queue remained reachable");
+}
+
 void unavailable_and_retirement()
 {
     Store_fixture store;
@@ -373,22 +396,7 @@ void unavailable_and_retirement()
         "read failure fabricated a stopped child");
 
     store.publish(state);
-    auto active = observation(store);
-    active.stop_after = 3;
-    active.on_wait = [&](unsigned count) {
-        if (count != 1) return;
-        Invocation retire;
-        retire.input.operation = "retire";
-        retire.input.payload = addon::encode_lifecycle_correlation_retire_request({
-            {std::string(k_nonce)}, addon::Lifecycle_correlation_retire_disposition::ABANDONED, std::nullopt});
-        observer.handle_lifetime(retire);
-        require(retire.success, "active observer could not be retired");
-        observer.handle_lifetime(retire);
-        require(retire.success, "repeated retirement was not idempotent");
-    };
-    observer.handle_observation(active);
-    require(active.done && active.waits == 1 && !observer.reserved(k_nonce), "retirement did not end the held watch");
-    require(!poll(observer).success, "retired queue remained reachable");
+    check_held_watch_retirement(observer, store);
 }
 
 void child_only_loss()
@@ -422,6 +430,7 @@ void child_only_loss()
         "retry consumed unacknowledged loss");
     require(!page(poll(observer, lost.resume_cursor, 16, k_nonce, 1)).child_loss,
         "acknowledgement replayed the child loss");
+    check_held_watch_retirement(observer, store);
 }
 
 void labels()

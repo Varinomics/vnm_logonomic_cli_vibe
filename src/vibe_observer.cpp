@@ -242,6 +242,13 @@ struct Observer::Impl {
             ~Watch_guard() { std::lock_guard lock(state.mutex); binding->observing = false; }
         } guard{*this, binding};
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(request->window_ms);
+        const auto wait_for_sample = [&] {
+            const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(
+                deadline - std::chrono::steady_clock::now()).count();
+            if (remaining > 0) {
+                context.wait_for_cancel(static_cast<int>(std::min<std::int64_t>(k_poll_interval_ms, remaining)));
+            }
+        };
         std::uint64_t available = 0;
         {
             std::lock_guard lock(mutex);
@@ -260,13 +267,9 @@ struct Observer::Impl {
             }
             if (coverage_lost) {
                 // A fresh native activation establishes the next child baseline.
-                // Keep other telemetry and the replayable poll queue available.
-                const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    deadline - std::chrono::steady_clock::now()).count();
-                if (remaining > 0) {
-                    context.wait_for_cancel(static_cast<int>(remaining));
-                }
-                break;
+                // Continue checking for retirement while the watch is held.
+                wait_for_sample();
+                continue;
             }
             auto read = read_native_snapshot(binding->transcript, binding->session_id, known);
             std::uint64_t added = 0;
@@ -316,10 +319,7 @@ struct Observer::Impl {
                 available += added;
                 context.report_progress(available, std::nullopt, addon::observe_progress_note(available));
             }
-            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline -
-                std::chrono::steady_clock::now()).count();
-            if (remaining <= 0) break;
-            context.wait_for_cancel(static_cast<int>(std::min<std::int64_t>(k_poll_interval_ms, remaining)));
+            wait_for_sample();
         }
         addon::Observe_result result;
         result.model_failure = request->model_failure;
