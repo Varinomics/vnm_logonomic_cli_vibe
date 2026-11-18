@@ -90,6 +90,7 @@ int main()
         {"managed-configuration", 1}, {"lifecycle-events", 2}, {"helper-ingress", 2},
         {"lifecycle-correlation-lifetime", 1},
         {"model-state", 1}, {"child-state", 1},
+        {"structured-model-observation", 1},
         {"execution-context", 1}, {"model-context-delivery", 2},
         {"context-state", 2},
         {"profile-storage", 1}, {"usage-scan", 3}, {"usage-session", 1}, {"usage-temporal", 1},
