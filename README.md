@@ -222,8 +222,9 @@ This capability declares only the implementation purpose. Read-only review is
 unavailable because Vibe's `ask` approval mode does not enforce a read-only tool
 policy. The provider does not add automatic approval. Saved-session selectors,
 an existing launcher prompt, and explicit cwd overrides are refused for this
-fresh-task route. Owned tasks retain the selected native profile. Delegated task-server relays
-remain a separate unimplemented capability.
+fresh-task route. Owned tasks retain the selected native profile. Vibe 3.1.2 closes each MCP
+relay after listing its tools and opens another one for dispatch. Logonomic
+admits one peer per task server, so delegated implementation remains unavailable.
 
 See [owned task contracts](docs/native_owned_tasks.md) for native source,
 inspection bounds, environment inputs, and qualification details.

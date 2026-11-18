@@ -303,6 +303,6 @@ is in
 [`headless_output.rs`](https://github.com/mistralai/mistral-vibe/blob/b20313e01d6926d4191da89c32d5da11e3a0a060/vibe/cli-rust/src/headless_output.rs).
 See [owned task contracts](native_owned_tasks.md) for the adopted route and its
 qualification. It does not need live attachment to the interactive session.
-Delegated tasks additionally require the SDK's host-supplied task-server relay
-and a qualified native MCP readiness/acknowledgement path. Ordinary headless
-execution alone does not establish that delegated coordination contract.
+Vibe 3.1.2 uses separate stdio relay processes for tool discovery and dispatch.
+Logonomic admits one peer per task server, so its delegated route is unavailable.
+See the [relay lifetime qualification](native_owned_tasks.md#delegated-task-server-lifetime).

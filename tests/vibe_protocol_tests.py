@@ -347,6 +347,9 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(binding["payload"], {"managed_configuration_version": 1})
         self.assertIn(("launcher-discovery", 1), advertised)
         self.assertIn(("launch-preparation", 3), advertised)
+        # The native MCP runtime opens separate discovery and execution relays.
+        # A delegated capability needs real tool dispatch under one host grant.
+        self.assertNotIn(("delegated-session", 3), advertised)
 
     def test_unknown_operations_preserve_the_session(self):
         for capability, version in (("launcher-discovery", 1), ("structured-session", 3),

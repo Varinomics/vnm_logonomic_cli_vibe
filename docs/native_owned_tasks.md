@@ -149,11 +149,31 @@ process diagnostics, protocol replies and a compact result file are retained
 under the caller's new evidence directory. This does not qualify the Logonomic
 desktop UI or another operating system.
 
-Delegated-session@3 remains undeclared. Its host relay and MCP connection
-contract requires more than launching a headless model: every required task
-server must be connected through the exact host-provided relay and descriptor,
-with reliable readiness and dispatch evidence. Native MCP configuration may be
-overridden by agent or managed settings, and the ordinary streaming history
-does not establish that readiness. The independently useful owned structured
-task path does not claim delegated control, live interactive coordination or
-per-model billing.
+### Delegated task-server lifetime
+
+Logonomic admits one relay peer for each task-server grant. Vibe 3.1.2 launches
+the supplied relay, requests `tools/list`, then closes it. On the model's first
+tool call, Vibe launches a second relay. Logonomic rejects that second peer.
+The model can still return a final answer and Vibe can exit zero after recording
+`mcp_transport_failed`. The package therefore leaves `delegated-session@3`
+unavailable. Ordinary implementation tasks still use `structured-session@3`.
+See the native [MCP discovery](https://github.com/mistralai/mistral-vibe/blob/b20313e01d6926d4191da89c32d5da11e3a0a060/harness/runtimes/python/python/mistralai_vibe_local_harness/vibe/_mcp_runtime.py)
+and [stdio lease lifetime](https://github.com/mistralai/mistral-vibe/blob/b20313e01d6926d4191da89c32d5da11e3a0a060/harness/runtimes/python/python/mistralai_vibe_local_harness/vibe/_mcp_pool.py).
+
+The Windows and Linux opt-in `tests/vibe_native_delegation_qualification.py` takes the same native
+CLI, upstream fixtures and built package as the owned-task qualification, plus
+the production Logonomic relay path. A controlled local status service records
+every admitted peer's MCP methods. The repeatable control receives one actual
+`status` call on the second peer. The single-peer case receives zero calls
+after successful discovery. Both runs return the scripted answer. This tests
+the installed CLI, package and production relay against the host's peer-count
+contract. The controlled endpoint supplies the server responses.
+
+Vibe's native session API supports HTTP MCP. Logonomic's current delegated
+connection supplies the exact stdio relay command and a private descriptor.
+It supplies no HTTP endpoint. Using HTTP would require a new task-owned
+transport that keeps the admitted relay alive, authenticates Vibe's requests,
+preserves its MCP tool restrictions and tears down both ends on cancellation.
+The existing native stdio registration has no setting to retain the discovery
+peer. A vendor-supported persistent registration would also satisfy this
+transport prerequisite. See the [native session MCP schema](https://github.com/mistralai/mistral-vibe/blob/b20313e01d6926d4191da89c32d5da11e3a0a060/vibe/app_server/protocol.py).
