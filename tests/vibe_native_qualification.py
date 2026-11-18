@@ -30,6 +30,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 
 
 RESUME_PROMPT = "Continue the exact saved delegation conversation."
@@ -181,12 +182,20 @@ def file_hashes(directory):
     }
 
 
-def capture_generation(session, destination):
-    for attempt in range(3):
-        target = destination / f"attempt-{attempt}" / "unified" / session.name
+def capture_generation(session, destination, child_sample=None):
+    deadline = time.monotonic() + 10
+    target = destination / "pending" / "unified" / session.name
+    while time.monotonic() < deadline:
         try:
             pointer_bytes = (session / "CURRENT").read_bytes()
             pointer = json.loads(pointer_bytes)
+            if child_sample:
+                name, expected = child_sample
+                state = runtime_state(session, pointer)
+                actual = (state.get("subagents") or {}).get("children", {}).get(name, {}).get("state", {}).get("type")
+                if actual != expected:
+                    time.sleep(0.025)
+                    continue
             generation_path = Path("generations") / pointer["generation"]
             shutil.copytree(session / generation_path, target / generation_path)
             (target / "CURRENT").write_bytes(pointer_bytes)
@@ -201,12 +210,14 @@ def capture_generation(session, destination):
             target.parent.parent.rmdir()
             return final / session.name
         except (OSError, AssertionError):
-            shutil.rmtree(destination / f"attempt-{attempt}", ignore_errors=True)
-    raise AssertionError(f"Could not capture a stable native generation at {session}")
+            shutil.rmtree(destination / "pending", ignore_errors=True)
+            time.sleep(0.025)
+    raise AssertionError(f"Could not capture a stable native generation at {session} for {child_sample}")
 
 
-def runtime_state(session):
-    pointer = json.loads((session / "CURRENT").read_text("utf-8"))
+def runtime_state(session, pointer=None):
+    if pointer is None:
+        pointer = json.loads((session / "CURRENT").read_text("utf-8"))
     generation = session / "generations" / pointer["generation"]
     manifest_bytes = (generation / "manifest.json").read_bytes().rstrip(b"\n")
     require(hashlib.sha256(manifest_bytes).hexdigest() == pointer["manifest_sha256"],
@@ -447,7 +458,11 @@ def run(arguments):
             return assistant_text_chunks(RESUME_ANSWER, created=130)
         label = "child-running" if not _is_parent_request(payload) else "child-settled"
         if (label == "child-running" or index > 0) and label not in snapshots:
-            snapshots[label] = capture_generation(root_session, root / "snapshots" / label)
+            # Model requests and commits to the parent's CURRENT have different
+            # delivery schedules. Inspect the persisted child before releasing
+            # the response that lets the native turn proceed.
+            expected = "running" if label == "child-running" else "idle"
+            snapshots[label] = capture_generation(root_session, root / "snapshots" / label, (SUBAGENT_NAME, expected))
         return _spawn_subagent_factory(index, payload)
 
     server = StreamingMockServer(chunk_factory=respond)
