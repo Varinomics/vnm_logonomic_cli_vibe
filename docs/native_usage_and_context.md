@@ -212,6 +212,20 @@ needs the attached turn/state stream and its gap-recovery rules. The existing
 notification hooks omit native turn identity and suppress some terminal notices
 while queued work or callbacks remain, so they remain inferred phase hints.
 
+In a native 3.1.2 run, the first completion hook saw an immutable projection
+whose turn was still in progress. After Resume, both the completion hook and
+the exit hook saw the *previous* completed turn in that projection. At both
+completion hooks, the pending journal contained a `projection_delta` with
+the new turn's exact ID and completed status in `set_envelope.state.latestTurn`.
+Reading these records requires the generation's sequence and digest chain.
+[Native recovery journal](https://github.com/mistralai/mistral-vibe/blob/b20313e01d6926d4191da89c32d5da11e3a0a060/harness/runtimes/python/python/mistralai_vibe_local_harness/vibe/_storage.py)
+
+The host classifies a hook against the current session and activation. Its
+ledger omits the admitted root turn ID. A delayed hook therefore cannot tie
+a sampled journal outcome to the active turn, and Vibe emits no completion
+notification for an interruption.
+[Native notification construction](https://github.com/mistralai/mistral-vibe/blob/b20313e01d6926d4191da89c32d5da11e3a0a060/vibe/app_server/_host_hooks.py)
+
 Native approval and question callbacks have stable IDs. The live protocol sends
 `callback/call`; delivery acknowledgement is distinct from the semantic answer
 submitted through `callback/result`. Answer, cancellation, and expiry must be
