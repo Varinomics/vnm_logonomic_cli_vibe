@@ -61,8 +61,23 @@ std::string label(std::string_view name)
     return std::string(name.substr(0, bytes));
 }
 
-addon::Lifecycle_observation child_observation(std::string_view owner, const Native_child& child,
-    bool started, std::string_view state_name)
+struct Child_event {
+    addon::Lifecycle_observation observation;
+    addon::Child_status status;
+};
+
+addon::Child_status terminal_status(Native_child_state state)
+{
+    switch (state) {
+        case Native_child_state::idle:        return addon::Child_status::SUCCEEDED;
+        case Native_child_state::turn_failed: return addon::Child_status::FAILED;
+        case Native_child_state::interrupted: return addon::Child_status::INTERRUPTED;
+        default:                              return addon::Child_status::UNKNOWN;
+    }
+}
+
+Child_event child_observation(std::string_view owner, const Native_child& child,
+    addon::Child_status status, std::string_view state_name)
 {
     addon::Lifecycle_observation result;
     result.provider_event_name = "vibe_subagent_" + std::string(state_name);
@@ -72,7 +87,8 @@ addon::Lifecycle_observation child_observation(std::string_view owner, const Nat
     // resurrected by a later message to the same child.
     result.agent_id = child.turn_id;
     result.agent_label = label(child.name);
-    result.subagent_transition = started ? addon::Subagent_transition::STARTED : addon::Subagent_transition::STOPPED;
+    result.subagent_transition = status == addon::Child_status::RUNNING ?
+        addon::Subagent_transition::STARTED : addon::Subagent_transition::STOPPED;
     // This is an observed child activity fact, not an outcome of the root turn.
     // The host's root phase/outcome fields deliberately stay neutral.
     std::string identity;
@@ -82,13 +98,14 @@ addon::Lifecycle_observation child_observation(std::string_view owner, const Nat
         identity.push_back('\0');
     }
     result.provider_event_id = "vibe-child:" + addon::to_hex(addon::Sha256::digest(identity));
-    return result;
+    return {std::move(result), status};
 }
 
-std::vector<addon::Lifecycle_observation> differences(std::string_view owner,
+std::vector<Child_event> differences(std::string_view owner,
     const std::map<std::string, Native_child>& previous, const std::vector<Native_child>& current, bool initial)
 {
-    std::vector<addon::Lifecycle_observation> result;
+    using Status = addon::Child_status;
+    std::vector<Child_event> result;
     for (const auto& child : current) {
         const auto found = previous.find(child.session_id);
         const auto* old = found == previous.end() ? nullptr : &found->second;
@@ -97,38 +114,38 @@ std::vector<addon::Lifecycle_observation> differences(std::string_view owner,
         const auto old_generation = old ? old->turn_generation.value_or(0) : 0;
         const bool later_run = child.turn_generation && *child.turn_generation > old_generation;
         if (active && !was_active) {
-            result.push_back(child_observation(owner, child, true, native_child_state_name(child.state)));
+            result.push_back(child_observation(owner, child, Status::RUNNING, native_child_state_name(child.state)));
         }
         else if (!active && was_active) {
             if (later_run) {
-                result.push_back(child_observation(owner, *old, false, "turn_advanced"));
-                result.push_back(child_observation(owner, child, true, "recorded_run"));
+                result.push_back(child_observation(owner, *old, Status::UNKNOWN, "turn_advanced"));
+                result.push_back(child_observation(owner, child, Status::RUNNING, "recorded_run"));
             }
             // Tombstones/deletion records no longer retain a turn. Their stop
             // belongs to the exact execution this observer previously started.
             const auto& stopped = child.turn_id.empty() ? *old : child;
-            result.push_back(child_observation(owner, stopped, false, native_child_state_name(child.state)));
+            result.push_back(child_observation(owner, stopped, terminal_status(child.state), native_child_state_name(child.state)));
         }
         else if (!initial && !active && later_run) {
             // The hook-gated baseline distinguishes earlier history from a
             // new run that finished between samples. Its committed native
             // outcome proves the run existed even when running was not seen.
-            result.push_back(child_observation(owner, child, true, "recorded_run"));
-            result.push_back(child_observation(owner, child, false, native_child_state_name(child.state)));
+            result.push_back(child_observation(owner, child, Status::RUNNING, "recorded_run"));
+            result.push_back(child_observation(owner, child, terminal_status(child.state), native_child_state_name(child.state)));
         }
         else if (active && was_active && later_run) {
             // A later native generation proves the previous activity ended,
             // even when its intervening idle state fell between two samples.
             // It does not prove a successful/failed/interrupted outcome.
-            result.push_back(child_observation(owner, *old, false, "turn_advanced"));
-            result.push_back(child_observation(owner, child, true, native_child_state_name(child.state)));
+            result.push_back(child_observation(owner, *old, Status::UNKNOWN, "turn_advanced"));
+            result.push_back(child_observation(owner, child, Status::RUNNING, native_child_state_name(child.state)));
         }
     }
     for (const auto& [id, child] : previous) {
         if (native_child_active(child.state) && std::none_of(current.begin(), current.end(), [&](const auto& item) {
                 return item.session_id == id;
             })) {
-            result.push_back(child_observation(owner, child, false, "removed"));
+            result.push_back(child_observation(owner, child, Status::UNKNOWN, "removed"));
         }
     }
     return result;
@@ -139,7 +156,7 @@ std::vector<addon::Lifecycle_observation> differences(std::string_view owner,
 struct Observer::Impl {
     struct Queued {
         std::uint64_t index = 0;
-        addon::Lifecycle_observation observation;
+        Child_event event;
     };
     struct Binding {
         std::string session_id;
@@ -148,6 +165,7 @@ struct Observer::Impl {
         std::string generation;
         std::map<std::string, Native_child> children;
         std::deque<Queued> queue;
+        std::optional<addon::Child_loss> child_loss;
         std::uint64_t produced = 0;
         std::uint64_t acknowledged = 0;
         std::uint64_t delivered = 0;
@@ -176,10 +194,10 @@ struct Observer::Impl {
         if (binding.queue.size() + batch.size() > k_max_queued_observations) {
             return "vibe_observer_queue_full";
         }
-        for (auto& observation : batch) {
+        for (auto& child : batch) {
             const auto index = ++binding.produced;
-            observation.provider_sequence = std::to_string(index);
-            binding.queue.push_back({index, std::move(observation)});
+            child.observation.provider_sequence = std::to_string(index);
+            binding.queue.push_back({index, std::move(child)});
             ++added;
         }
         binding.children.clear();
@@ -227,16 +245,28 @@ struct Observer::Impl {
         std::uint64_t available = 0;
         {
             std::lock_guard lock(mutex);
-            available = binding->queue.size();
+            available = binding->produced - binding->acknowledged;
         }
         if (available) context.report_progress(available, std::nullopt, addon::observe_progress_note(available));
         unsigned failures = 0;
         while (!context.cancel_requested() && std::chrono::steady_clock::now() < deadline) {
             std::string known;
+            bool coverage_lost;
             {
                 std::lock_guard lock(mutex);
                 if (binding->retired) break;
                 known = binding->current_sha256;
+                coverage_lost = binding->child_loss.has_value();
+            }
+            if (coverage_lost) {
+                // A fresh native activation establishes the next child baseline.
+                // Keep other telemetry and the replayable poll queue available.
+                const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    deadline - std::chrono::steady_clock::now()).count();
+                if (remaining > 0) {
+                    context.wait_for_cancel(static_cast<int>(remaining));
+                }
+                break;
             }
             auto read = read_native_snapshot(binding->transcript, binding->session_id, known);
             std::uint64_t added = 0;
@@ -245,29 +275,42 @@ struct Observer::Impl {
                     context.fail(addon::Result_status::UNAVAILABLE, "vibe_observer_requires_main_session");
                     return;
                 }
+                std::lock_guard lock(mutex);
+                if (binding->retired) break;
                 if (std::count_if(read.snapshot->children.begin(), read.snapshot->children.end(), [](const auto& child) {
                         return native_child_active(child.state);
                     }) > 128) {
-                    context.fail(addon::Result_status::UNAVAILABLE, "vibe_subagent_capacity");
-                    return;
+                    error = "vibe_subagent_capacity";
                 }
-                failures = 0;
-                {
-                    std::lock_guard lock(mutex);
-                    if (binding->retired) break;
+                else {
                     error = accept_snapshot(*binding, std::move(*read.snapshot), added);
                 }
-                if (!error.empty()) {
-                    context.fail(addon::Result_status::FAILED, error);
-                    return;
-                }
+                failures = 0;
             }
             else if (read.unchanged) failures = 0;
             else if (++failures >= k_max_read_failures) {
                 // A broken/unfamiliar store is unavailable evidence, never an
                 // empty graph or a fabricated successful stop of its workers.
-                context.fail(addon::Result_status::UNAVAILABLE, read.reason);
-                return;
+                if (read.reason == "vibe_store_child_invalid" || read.reason == "vibe_store_children_invalid") {
+                    error = read.reason;
+                }
+                else {
+                    context.fail(addon::Result_status::UNAVAILABLE, read.reason);
+                    return;
+                }
+            }
+            if (!error.empty()) {
+                if (request->child_state_version != 1 || error == "vibe_store_generation_regressed") {
+                    const auto status = (error == "vibe_subagent_capacity" || !read.reason.empty()) ?
+                        addon::Result_status::UNAVAILABLE : addon::Result_status::FAILED;
+                    context.fail(status, error);
+                    return;
+                }
+                std::lock_guard lock(mutex);
+                if (binding->retired) break;
+                binding->child_loss = addon::Child_loss{
+                    binding->session_id, nonce, ++binding->produced, error, "vibe.subagents"};
+                ++added;
             }
             if (added) {
                 available += added;
@@ -280,6 +323,7 @@ struct Observer::Impl {
         }
         addon::Observe_result result;
         result.model_failure = request->model_failure;
+        result.child_failure = request->child_failure;
         result.execution_failure = request->execution_failure;
         if (request->context_failure) {
             result.context_failure = addon::Context_failure{binding->session_id, *request->context_failure};
@@ -312,6 +356,7 @@ struct Observer::Impl {
         }
         addon::Poll_observations_result result;
         result.model_failure = request->model_failure;
+        result.child_failure = request->child_failure;
         result.execution_failure = request->execution_failure;
         std::string error;
         const auto nonce = request->correlation->transition_nonce;
@@ -331,12 +376,33 @@ struct Observer::Impl {
                 std::size_t count = 0;
                 for (const auto& queued : binding->queue) {
                     if (count++ == request->limit) break;
-                    result.observations.push_back(queued.observation);
+                    const auto& observation = queued.event.observation;
+                    result.observations.push_back(observation);
+                    if (request->child_state_version == 1) {
+                        addon::Child_update update;
+                        update.provider_session_id = binding->session_id;
+                        update.transition_nonce    = nonce;
+                        update.sequence            = queued.index;
+                        update.agent_id            = observation.agent_id;
+                        update.depth               = 1;
+                        update.status              = queued.event.status;
+                        update.source              = observation.provider_event_name;
+                        result.child_updates.push_back(std::move(update));
+                    }
                     last = queued.index;
+                }
+                if (result.observations.empty() && binding->child_loss && last < binding->child_loss->sequence) {
+                    if (request->child_state_version == 1) {
+                        result.child_loss = binding->child_loss;
+                        last = binding->child_loss->sequence;
+                    }
+                    else if (!request->child_failure) {
+                        error = binding->child_loss->reason_code;
+                    }
                 }
                 binding->delivered = std::max(binding->delivered, last);
                 result.resume_cursor = cursor(nonce, 'p', last);
-                result.more = !binding->queue.empty() && binding->queue.back().index > last;
+                result.more = last < binding->produced && (!result.observations.empty() || !result.child_failure);
             }
         }
         if (!error.empty()) {

@@ -5,6 +5,7 @@
 #include <logonomic_cli_addon/lifecycle_events.h>
 #include <logonomic_cli_addon/package_source.h>
 
+#include <array>
 #include <functional>
 #include <iostream>
 
@@ -72,7 +73,7 @@ Invocation observation(const Store_fixture& store, std::string watch_cursor = {}
 }
 
 Invocation poll(vibe::Observer& observer, std::string consumption = {}, std::size_t limit = 16,
-    std::string_view nonce = k_nonce)
+    std::string_view nonce = k_nonce, std::uint32_t child_version = 0)
 {
     Invocation call;
     call.input.operation = "poll_observations";
@@ -80,6 +81,7 @@ Invocation poll(vibe::Observer& observer, std::string consumption = {}, std::siz
     request.resume_cursor = std::move(consumption);
     request.limit = limit;
     request.correlation = addon::Session_correlation{std::string(nonce)};
+    request.child_state_version = child_version;
     call.input.payload = addon::encode_poll_observations_request(request);
     observer.handle_observation(call);
     return call;
@@ -119,7 +121,7 @@ void optional_request_failures()
     const auto baseline_poll = poll(observer);
     require(baseline_poll.success && page(baseline_poll).observations.size() == 1,
         "baseline child observation was not queued");
-    for (const char* member : {"execution_context", "model_state"}) {
+    for (const char* member : {"execution_context", "model_state", "child_state"}) {
         auto failure = json(R"({"version":1,"failure":{"reason_code":"unsupported_version"}})");
         failure.find("failure")->set("detail",
             addon::Json_value(std::string(member) + " request is malformed or its version is unsupported"));
@@ -236,6 +238,22 @@ void child_runs_and_cursors()
     const auto first = page(first_call, 2);
     const auto repeated = poll(observer, {}, 2);
     require(repeated.output == first_call.output, "retry consumed an unacknowledged page");
+    const auto described = page(poll(observer, {}, 16, k_nonce, 1));
+    require(first.child_updates.empty() && described.child_updates.size() == 8 && !described.child_failure,
+        "negotiated child outcomes did not follow the lifecycle page");
+    const std::array expected = {
+        addon::Child_status::RUNNING, addon::Child_status::SUCCEEDED,
+        addon::Child_status::RUNNING, addon::Child_status::INTERRUPTED,
+        addon::Child_status::RUNNING, addon::Child_status::FAILED,
+        addon::Child_status::RUNNING, addon::Child_status::UNKNOWN,
+    };
+    for (std::size_t index = 0; index < expected.size(); ++index) {
+        const auto& sample = described.child_updates[index];
+        require(sample.provider_session_id == "root-session" && sample.transition_nonce == k_nonce &&
+            sample.sequence == index + 1 && sample.agent_id == described.observations[index].agent_id &&
+            sample.depth == 1 && sample.parent_agent_id.empty() && sample.status == expected[index],
+            "child outcome lost its captured turn, sequence or native state");
+    }
     require(first.more && first.observations.size() == 2, "bounded page did not retain remaining observations");
     require(first.observations[0].agent_id == "child-one:turn:1" &&
         first.observations[1].agent_id == "child-one:turn:1", "running and completed first run lost their shared identity");
@@ -373,6 +391,39 @@ void unavailable_and_retirement()
     require(!poll(observer).success, "retired queue remained reachable");
 }
 
+void child_only_loss()
+{
+    Store_fixture store;
+    vibe::Observer observer;
+    auto state = runtime();
+    set_child(state, child());
+    store.publish(state);
+    bind(observer, store);
+    auto invalid = child();
+    invalid.find("state")->set("type", addon::Json_value("unrecognized"));
+    set_child(state, invalid);
+    store.publish(state);
+    auto watch = observation(store);
+    watch.input.payload.set("child_state", json(R"({"version":1})"));
+    watch.stop_after = 12;
+    observer.handle_observation(watch);
+    require(watch.success, "a child-only coverage loss failed the root observation");
+    const auto start = page(poll(observer, {}, 16, k_nonce, 1));
+    require(start.more && start.child_updates.size() == 1 && !start.child_loss,
+        "child coverage loss discarded earlier unacknowledged evidence");
+    const auto lost_call = poll(observer, start.resume_cursor, 16, k_nonce, 1);
+    const auto lost = page(lost_call);
+    require(lost.observations.empty() && !lost.more && lost.child_loss &&
+        lost.child_loss->transition_nonce == k_nonce && lost.child_loss->provider_session_id == "root-session" &&
+        lost.child_loss->sequence > start.child_updates.front().sequence &&
+        lost.child_loss->reason_code == "vibe_store_child_invalid",
+        "child-only loss was not captured in order for its activation");
+    require(poll(observer, start.resume_cursor, 16, k_nonce, 1).output == lost_call.output,
+        "retry consumed unacknowledged loss");
+    require(!page(poll(observer, lost.resume_cursor, 16, k_nonce, 1)).child_loss,
+        "acknowledgement replayed the child loss");
+}
+
 void labels()
 {
     Store_fixture store;
@@ -432,6 +483,7 @@ int main()
         reserved_child_outcomes();
         state_gaps_and_forks();
         unavailable_and_retirement();
+        child_only_loss();
         labels();
         fast_runs_and_regression();
         optional_request_failures();

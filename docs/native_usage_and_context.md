@@ -251,7 +251,8 @@ source-captured activation and sequence. Transcript metadata, per-command
 directories, and launch input do not meet that contract. Until an attributed
 live route is adopted, this package reports only its joint native session-start
 cwd fact. Reporting a directory also does not independently prove a Git
-worktree or repository identity.
+worktree or repository identity. Current Logonomic hosts omit this optional
+capability. Resume uses the conversation's registered directory.
 
 ### Authentication, quotas, and owned tasks
 

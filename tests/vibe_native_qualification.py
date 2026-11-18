@@ -111,8 +111,9 @@ def qualify_native_observer(adapter, root, workspace, start_event, snapshots, ch
     })
     watch_cursor = observe_one_change(adapter, session_id, workspace, nonce)
     correlation = {"version": 1, "transition_nonce": nonce}
+    child_state = {"child_state": {"version": 1}} if supports(adapter, "child-state", 1) else {}
     first = success(adapter, "lifecycle-events", 2, "poll_observations", {
-        "resume_cursor": "", "limit": 16, "correlation": correlation,
+        "resume_cursor": "", "limit": 16, "correlation": correlation, **child_state,
     })
     require(len(first["observations"]) == 1, first)
     started = first["observations"][0]
@@ -130,7 +131,7 @@ def qualify_native_observer(adapter, root, workspace, start_event, snapshots, ch
     replacement.write_bytes((snapshots["child-settled"] / "CURRENT").read_bytes())
     replacement.replace(replay / "CURRENT")
     observe_one_change(adapter, session_id, workspace, nonce, watch_cursor)
-    query = {"resume_cursor": first["resume_cursor"], "limit": 16, "correlation": correlation}
+    query = {"resume_cursor": first["resume_cursor"], "limit": 16, "correlation": correlation, **child_state}
     last = success(adapter, "lifecycle-events", 2, "poll_observations", query)
     repeated = success(adapter, "lifecycle-events", 2, "poll_observations", query)
     require(last == repeated, "Repeated observer page was not replayable before acknowledgement")
@@ -138,6 +139,12 @@ def qualify_native_observer(adapter, root, workspace, start_event, snapshots, ch
     stopped = last["observations"][0]
     require(stopped["subagent_transition"] == "stopped" and stopped["agent_id"] == child_turn_id
             and stopped["provider_event_name"] == "vibe_subagent_idle", stopped)
+    if child_state:
+        for frame, state in ((first, "running"), (last, "succeeded")):
+            sample, = frame["child_state"]["updates"]
+            require(sample["state"] == state and sample["transition_nonce"] == nonce
+                    and sample["provider_session_id"] == session_id and sample["agent_id"] == child_turn_id
+                    and sample["parent_agent_id"] == "" and sample["depth"] == 1, sample)
     for observation in (started, stopped):
         require(observation["provider_session_id"] == session_id and observation["provider_turn_id"] == "",
                 "Child activity was attributed to a root turn")

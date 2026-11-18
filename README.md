@@ -25,8 +25,9 @@ fail their affected capability when the store contract is unfamiliar.
 | `lifecycle-events@2` | Native session start/resume/end, confirmed root working status, inferred root completion/attention hints, and continuous observation of native child runs. |
 | `helper-ingress@2` | Delivers bounded native hook events through the SDK helper client and checks the host's active session ledger. |
 | `lifecycle-correlation-lifetime@1` | Reserves and retires exact native activation bindings; observation pages remain replayable until acknowledged. |
+| `child-state@1` | Reports the state of each observed direct child turn, including completed, interrupted and failed outcomes. |
 | `model-state@1` | Reports the root model as unavailable at each native session start, because Vibe exposes only the selected alias. Owned tasks report their model as unavailable. |
-| `execution-context@1` | Exact native default directory at session start, jointly attributed to that activation. |
+| `execution-context@1` | Provides the native session-start directory to hosts that request it. Logonomic uses the registered conversation directory for Resume. |
 | `model-context-delivery@2` | Host-owned title/summary and other model guidance through the hidden native session-start context channel, fenced to the captured activation. |
 | `context-state@2` | Native context occupancy and capacity; fresh, explicitly incomplete successful-compaction history lower bounds. |
 | `profile-storage@1` | Acknowledges the host-owned provider cache directory. |
@@ -136,7 +137,9 @@ not attach to a second app-server instance or choose the newest directory.
 
 Child observations retain assigned names and parent relationships. Each native
 child turn has its own stable execution span, so sending another message to a
-finished child does not resurrect its previous span. Persisted running,
+finished child opens a new span. A reservation can fail before the first turn
+starts. A closing child retains its running turn until Vibe settles or removes it.
+When a turn disappears without a recorded outcome, its result is unknown. Persisted running,
 completion, failure, interruption, and deletion states provide the available
 evidence. A complete child run between samples can be recovered from its latest
 outcome; several entirely completed runs between samples cannot all be

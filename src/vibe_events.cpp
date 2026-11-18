@@ -142,6 +142,7 @@ addon::Classify_event_result classify_event(const addon::Classify_event_request&
 {
     addon::Classify_event_result result;
     result.model_failure = request.model_failure;
+    result.child_failure = request.child_failure;
     result.execution_failure = request.execution_failure;
     if (request.context_failure) {
         result.context_failure = addon::Context_failure{{}, *request.context_failure};
