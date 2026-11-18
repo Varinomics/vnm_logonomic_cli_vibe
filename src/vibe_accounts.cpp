@@ -4,10 +4,6 @@
 #include <logonomic_cli_addon/package_source.h>
 #include <logonomic_cli_addon/sha256.h>
 
-#ifdef _WIN32
-#include <windows.h>
-#endif
-
 #include <string>
 #include <system_error>
 
@@ -19,25 +15,9 @@ namespace {
 
 std::optional<std::string> account_key(const fs::path& home)
 {
-#ifdef _WIN32
-    const auto& native = home.native();
-    const int size = static_cast<int>(native.size());
-    const int count = LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_LOWERCASE,
-        native.data(), size, nullptr, 0, nullptr, nullptr, 0);
-    if (count <= 0) {
-        return std::nullopt;
-    }
-    std::wstring folded(count, L'\0');
-    if (LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_LOWERCASE,
-        native.data(), size, folded.data(), count, nullptr, nullptr, 0) != count)
-    {
-        return std::nullopt;
-    }
-    const auto identity = addon::path_to_utf8(fs::path(folded));
-#else
-    const auto identity = addon::path_to_utf8(home);
-#endif
-    return "vibe-profile:" + addon::to_hex(addon::Sha256::digest(identity));
+    const auto identity = addon::native_account_profile_identity(home);
+    if (!identity) return std::nullopt;
+    return "vibe-profile:" + addon::to_hex(addon::Sha256::digest(*identity));
 }
 
 } // namespace
@@ -53,8 +33,7 @@ bool matches_account(const std::optional<fs::path>& home, const addon::Account_c
     if (!account.profile_path) {
         return false;
     }
-    const auto retained = addon::path_from_utf8(*account.profile_path);
-    return retained.is_absolute() && account_key(retained) == account.adapter_account_key;
+    return addon::same_native_account_profile(addon::path_from_utf8(*account.profile_path), *home);
 }
 
 void handle_accounts(addon::Invocation_context& context)

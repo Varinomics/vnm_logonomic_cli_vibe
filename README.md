@@ -78,6 +78,10 @@ arbitrary directories selected by different launchers. A profile identifies
 the local source containing the history. Remote sign-in and billing identity
 require independent evidence.
 
+On Windows, profile identity follows the parent directory's case-sensitivity
+setting. Two distinct homes named `Work` and `work` in a case-sensitive
+directory have separate grants and usage caches.
+
 An ordinary launch that already contains `--resume`, `--continue`, or `-c` is
 recognized but left unmanaged: native Vibe can restore a different working
 directory. Use Logonomic's remembered-session resume for the checked path.

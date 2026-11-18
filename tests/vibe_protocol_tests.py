@@ -379,7 +379,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual((record["status"], record["display_name"]), ("available", custom.name))
         environment["VIBE_HOME"] = str(custom.parent) + os.sep + "." + os.sep + custom.name
         self.assertEqual(self.selected_profile(preparation), account)
-        if os.name == "nt":
+        if os.name == "nt" and Path(str(custom).upper()).is_dir():
             environment["VIBE_HOME"] = str(custom).upper()
             self.assertEqual(self.selected_profile(preparation)["adapter_account_key"], account["adapter_account_key"])
         environment["VIBE_HOME"] = str(custom / "not a directory")
@@ -390,6 +390,33 @@ class ProtocolTests(unittest.TestCase):
         request["launcher"] = {"runner_key": "direct", "script_body": "unrelated", "environment_text": ""}
         self.assertEqual(self.success("accounts", 2, "discover", request)["accounts"], [])
         self.assertIsNone(self.success("accounts", 2, "resolve", request)["adapter_account_key"])
+
+    @unittest.skipUnless(os.name == "nt", "Windows per-directory case sensitivity")
+    def test_case_sensitive_windows_profiles_remain_distinct(self):
+        executable, environment = self.installed_cli()
+        preparation = self.preparation_request(executable, environment)
+        parent = self.root / "case-sensitive"
+        parent.mkdir()
+        configured = subprocess.run(["fsutil.exe", "file", "setCaseSensitiveInfo", str(parent), "enable"],
+                                    capture_output=True, timeout=10)
+        if configured.returncode:
+            self.skipTest("This Windows filesystem cannot enable per-directory case sensitivity")
+        upper, lower = parent / "Work", parent / "work"
+        environment["VIBE_HOME"] = str(upper)
+        first = self.selected_profile(preparation)
+        environment["VIBE_HOME"] = str(lower)
+        second = self.selected_profile(preparation)
+        self.assertNotEqual(first["adapter_account_key"], second["adapter_account_key"])
+        upper.mkdir()
+        lower.mkdir()
+        self.assertFalse(upper.samefile(lower))
+        self.assertEqual(self.selected_profile(preparation), second)
+        old_key = "vibe-profile:" + hashlib.sha256(str(lower).lower().encode("utf-8")).hexdigest()
+        for grant in (first, {"version": 1, "adapter_account_key": first["adapter_account_key"]},
+                      {"version": 1, "adapter_account_key": old_key}):
+            preparation["account_context"] = grant
+            refused = self.adapter.invoke("launch-preparation", 3, "prepare", preparation)
+            self.assertEqual((refused["status"], refused["reason"]), ("unavailable", "account_context_mismatch"))
 
     def test_selected_launch_and_resume_use_retained_profile(self):
         _, request, _ = self.resume_fixture()

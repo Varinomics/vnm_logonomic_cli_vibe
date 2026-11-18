@@ -98,6 +98,16 @@ def run_case(case, root, adapter, harness, native, vibe, source_fixtures):
     for path in (home, workspace, profile):
         path.mkdir()
     native_home = directory / "selected Vibe profile"
+    case_sibling = None
+    if case == "success" and os.name == "nt":
+        profiles = directory / "profiles"
+        profiles.mkdir()
+        configured = subprocess.run(["fsutil.exe", "file", "setCaseSensitiveInfo", str(profiles), "enable"],
+                                    capture_output=True, timeout=10)
+        if configured.returncode == 0:
+            native_home = profiles / "Work"
+            case_sibling = profiles / "work"
+            case_sibling.mkdir()
     marker = directory / "foreground-hook-ran"
     if os.name == "nt":
         poison_hook = directory / "foreground-hook.cmd"
@@ -154,6 +164,13 @@ def run_case(case, root, adapter, harness, native, vibe, source_fixtures):
             "prompt_base64": base64.b64encode(PROMPT.encode("utf-8")).decode("ascii"),
         }
         request["account_context"] = native.selected_profile(adapter, request, native_home, home)
+        if case_sibling is not None:
+            sibling_environment = dict(environment, VIBE_HOME=str(case_sibling))
+            sibling_request = dict(request, launch_environment={
+                "platform": harness.PLATFORM, "effective_environment": sibling_environment})
+            sibling = native.selected_profile(adapter, sibling_request, case_sibling, home)
+            require(sibling["adapter_account_key"] != request["account_context"]["adapter_account_key"],
+                    "Case-distinct native profiles shared an account key")
         prepared = success(adapter, "prepare", request)
         process = prepared["process"]
         require(process["executable"] == {"launcher_program": True} and
@@ -206,6 +223,7 @@ def run_case(case, root, adapter, harness, native, vibe, source_fixtures):
                 "Owned task persisted outside its selected Vibe profile")
         if case == "success":
             qualify_profile_history(adapter, native, request, transcript, native_home, directory, server, adapter.package)
+            require(case_sibling is None or not any(case_sibling.iterdir()), "Native work wrote into the other profile")
 
         state = prepared["inspection"]["protocol_state_base64_chunks"]
         trace = []
@@ -247,6 +265,7 @@ def run_case(case, root, adapter, harness, native, vibe, source_fixtures):
             "fragmented_inspections": len(trace) - 1,
             "foreground_hook_inactive": True, "native_permission_preserved": True,
             "public_prompt_exact": True, "selected_profile_verified": True,
+            "case_sensitive_sibling_verified": case_sibling is not None,
         }
     finally:
         server.stop()
