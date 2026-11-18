@@ -65,7 +65,7 @@ def success(adapter, operation, payload):
 
 
 def inspect(adapter, state, stdout, stderr=b"", *, final=False, exit_code=0, timed_out=False):
-    return success(adapter, "inspect", {
+    request = {
         "purpose": "implementation",
         "inspection": {
             "protocol_state_base64_chunks": state,
@@ -75,7 +75,17 @@ def inspect(adapter, state, stdout, stderr=b"", *, final=False, exit_code=0, tim
             "timed_out": timed_out,
             "exit_code": exit_code,
         },
-    })
+    }
+    if final:
+        request["model_state"] = {"version": 1}
+    result = success(adapter, "inspect", request)
+    if final:
+        require(result.get("model_state") == {
+            "version": 1, "failure": {"reason_code": "vibe_task_model_unavailable", "detail": ""},
+        }, "The native stream did not identify its execution model")
+    else:
+        require("model_state" not in result, "An inspection returned unrequested model evidence")
+    return result
 
 
 def run_case(case, root, adapter, harness, native, vibe, source_fixtures):
@@ -312,6 +322,7 @@ def run(arguments):
     harness = load_local("owned_protocol_harness", "vibe_protocol_tests.py")
     native = load_local("owned_native_harness", "vibe_native_qualification.py")
     adapter = harness.Adapter(package, root)
+    require(native.supports(adapter, "structured-model-observation", 1), "Packaged structured model opt-in missing")
     try:
         require(any(item == {"capability_id": "structured-session", "version": 3}
                     for item in adapter.capabilities_frame["capabilities"]),

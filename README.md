@@ -29,6 +29,7 @@ fail their affected capability when the store contract is unfamiliar.
 | `lifecycle-correlation-lifetime@1` | Reserves and retires exact native activation bindings; observation pages remain replayable until acknowledged. |
 | `child-state@1` | Reports the state of each observed direct child turn, including completed, interrupted and failed outcomes. |
 | `model-state@1` | Reports the root model as unavailable at each native session start, because Vibe exposes only the selected alias. Owned tasks report their model as unavailable. |
+| `structured-model-observation@1` | Answers a host model query during task inspection. Vibe's native headless history omits the execution model, so the query reports it as unavailable while the task still settles. |
 | `execution-context@1` | Provides the native session-start directory to hosts that request it. Logonomic uses the registered conversation directory for Resume. |
 | `model-context-delivery@2` | Host-owned title/summary and other model guidance through the hidden native session-start context channel, fenced to the captured activation. |
 | `context-state@2` | Native context occupancy and capacity; fresh, explicitly incomplete successful-compaction history lower bounds. |
