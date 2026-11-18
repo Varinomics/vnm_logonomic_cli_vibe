@@ -228,6 +228,17 @@ class ProtocolTests(unittest.TestCase):
             "profile_storage": {"version": 1, "root": str(profile)},
         }
 
+    def accounts_input(self, preparation):
+        return {"launcher": preparation["launcher"], "launch_environment": preparation["launch_environment"],
+                "normalization_directory": str(self.workspace), "default_home_fallback": str(self.home)}
+
+    def selected_profile(self, preparation):
+        request = self.accounts_input(preparation)
+        record, = self.success("accounts", 2, "discover", request)["accounts"]
+        selection = self.success("accounts", 2, "resolve", request)
+        self.assertEqual(selection["adapter_account_key"], record["adapter_account_key"])
+        return {"version": 2, **selection, "profile_path": record["profile_path"]}
+
     def event(self, name, body, current_session=None):
         self.event_sequence += 1
         nonce = f"{self.event_sequence:032x}"
@@ -330,17 +341,73 @@ class ProtocolTests(unittest.TestCase):
         for sidecar in (PACKAGE / "capabilities").glob("*.json"):
             content = json.loads(sidecar.read_text("utf-8"))
             declared.add((content["capability_id"], content["version"]))
-        self.assertEqual(advertised, declared)
+        self.assertEqual(declared - advertised, {("account-profile-managed-configuration", 1)})
+        self.assertFalse(advertised - declared)
+        binding = json.loads((PACKAGE / "capabilities" / "account-profile-managed-configuration@1.json").read_text("utf-8"))
+        self.assertEqual(binding["payload"], {"managed_configuration_version": 1})
         self.assertIn(("launcher-discovery", 1), advertised)
         self.assertIn(("launch-preparation", 3), advertised)
 
     def test_unknown_operations_preserve_the_session(self):
         for capability, version in (("launcher-discovery", 1), ("structured-session", 3),
-                                    ("org.example.unknown", 1)):
+                                    ("accounts", 2), ("org.example.unknown", 1)):
             response = self.adapter.invoke(capability, version, "unknown_operation", {})
             self.assertEqual(response["status"], "unavailable", response)
             self.assertEqual(response["reason"], "unknown_operation", response)
         self.assertTrue(self.recognize("vibe")["recognized"])
+
+    def test_accounts_follow_native_launcher_home(self):
+        executable, environment = self.installed_cli()
+        preparation = self.preparation_request(executable, environment)
+        request = self.accounts_input(preparation)
+        default = self.selected_profile(preparation)
+        self.assertEqual(Path(default["profile_path"]), self.native_home)
+        for key in ("VIBE_HOME", "USERPROFILE", "HOME"):
+            environment.pop(key)
+        self.assertEqual(self.selected_profile(preparation), default)
+        custom = self.root / "outside profile Ω"
+        environment["VIBE_HOME"] = str(custom)
+        self.assertEqual(self.success("accounts", 2, "discover", request)["accounts"][0]["status"], "unknown")
+        self.assertFalse(custom.exists())
+        custom.mkdir()
+        account = self.selected_profile(preparation)
+        self.assertNotEqual(account["adapter_account_key"], default["adapter_account_key"])
+        record, = self.success("accounts", 2, "discover", request)["accounts"]
+        self.assertEqual((record["status"], record["display_name"]), ("available", custom.name))
+        environment["VIBE_HOME"] = str(custom.parent) + os.sep + "." + os.sep + custom.name
+        self.assertEqual(self.selected_profile(preparation), account)
+        if os.name == "nt":
+            environment["VIBE_HOME"] = str(custom).upper()
+            self.assertEqual(self.selected_profile(preparation)["adapter_account_key"], account["adapter_account_key"])
+        environment["VIBE_HOME"] = str(custom / "not a directory")
+        Path(environment["VIBE_HOME"]).write_text("fixture", encoding="utf-8")
+        self.assertEqual(self.success("accounts", 2, "discover", request)["accounts"][0]["status"], "unavailable")
+        environment["VIBE_HOME"] = "relative-profile"
+        self.assertEqual(self.adapter.invoke("accounts", 2, "discover", request)["status"], "unavailable")
+        request["launcher"] = {"runner_key": "direct", "script_body": "unrelated", "environment_text": ""}
+        self.assertEqual(self.success("accounts", 2, "discover", request)["accounts"], [])
+        self.assertIsNone(self.success("accounts", 2, "resolve", request)["adapter_account_key"])
+
+    def test_selected_launch_and_resume_use_retained_profile(self):
+        _, request, _ = self.resume_fixture()
+        selection = self.selected_profile(request)
+        normal = {key: value for key, value in request.items() if key != "resume"}
+        for account in (selection, {"version": 1, "adapter_account_key": selection["adapter_account_key"]}):
+            normal["account_context"] = account
+            request["account_context"] = account
+            for result in (self.success("launch-preparation", 3, "prepare", normal),
+                           self.success("interactive-resume", 2, "prepare_resume", request)):
+                self.assertEqual(result["account_context"], account)
+                self.assertEqual(result["profile_storage"], request["profile_storage"])
+                self.assertNotIn("VIBE_HOME", result["environment"]["set"])
+            self.assertEqual(self.inspect_resume(request)["availability"], "available")
+        for account in (dict(selection, adapter_account_key="different"), dict(selection, profile_path=str(self.home)),
+                        dict(selection, profile_path=None)):
+            normal["account_context"] = account
+            request["account_context"] = account
+            self.assertEqual(self.adapter.invoke("launch-preparation", 3, "prepare", normal)["status"], "unavailable")
+            self.assertEqual(self.adapter.invoke("interactive-resume", 2, "prepare_resume", request)["status"], "unavailable")
+            self.assertEqual(self.inspect_resume(request)["availability"], "unknown")
 
     def test_structured_implementation_admission(self):
         declaration = json.loads((PACKAGE / "capabilities" / "structured-session@3.json").read_text("utf-8"))
@@ -407,6 +474,40 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(descriptions, {"records": [{**identity, "session": {
             "version": 1, "provider_session_id": session, "excludes_turn_in_flight": False,
         }}]})
+
+    def test_selected_tasks_and_usage_reject_a_changed_scope(self):
+        executable, environment = self.installed_cli()
+        request = self.preparation_request(executable, environment)
+        request.pop("title_instruction")
+        account = self.selected_profile(request)
+        request["account_context"] = account
+        task = dict(request, purpose="implementation", prompt_base64="dGFzaw==")
+        prepared = self.success("structured-session", 3, "prepare", task)
+        self.assertEqual(prepared["account_context"], account)
+        self.assertIn("VIBE_HOME", prepared["process"]["environment_names"])
+        environment.pop("VIBE_HOME")
+        prepared = self.success("structured-session", 3, "prepare", task)
+        self.assertEqual(Path(prepared["process"]["environment"]["VIBE_HOME"]), self.native_home)
+        count = Path(request["profile_storage"]["root"]) / "selected-usage"
+        count.mkdir()
+        usage = dict(request, mode="incremental", snapshot_id=None, cursor=None,
+                     cache_selection={"version": 1, "accepted": None, "candidate_root": str(count)})
+        first = self.success("usage-scan", 3, "scan", usage)
+        self.assertEqual(first["account_context"], account)
+        self.assertEqual(first["scope"]["source_account_key"], account["adapter_account_key"])
+        other = self.root / "other-vibe"
+        other.mkdir()
+        environment["VIBE_HOME"] = str(other)
+        second_cache = count.with_name("second")
+        second_cache.mkdir()
+        usage["cache_selection"] = {"version": 1, "accepted": first["cache_candidate"], "candidate_root": str(second_cache)}
+        for capability, operation, payload in (("structured-session", "prepare", task), ("usage-scan", "scan", usage)):
+            result = self.adapter.invoke(capability, 3, operation, payload)
+            self.assertEqual((result["status"], result["reason"]), ("unavailable", "account_context_mismatch"), result)
+        usage["account_context"] = self.selected_profile(request)
+        mixed = self.adapter.invoke("usage-scan", 3, "scan", usage)
+        self.assertNotEqual(mixed["status"], "success")
+        self.assertFalse(any(second_cache.iterdir()))
 
     def test_observation_binding_requires_reserved_frozen_context(self):
         nonce = "e" * 32

@@ -28,8 +28,10 @@ behavior, and the available CLI tool filters do not establish a complete
 read-only policy across configured tools and extensions. Saved-session
 selectors, an existing initial prompt, unsupported launcher options and
 VIBE_CWD overrides also fail preparation. Tasks therefore start with a fresh
-native identity in the host-selected workspace. Selected account contexts are
-unavailable until the provider implements the separate accounts contract.
+native identity in the host-selected workspace. A selected account must resolve
+to the same native Vibe home in the frozen launch environment. Preparation
+echoes the host's exact account and storage scope, and the native process uses
+that home.
 
 The sidecar declares native model, agent, tool-policy, MCP and connection
 environment inputs. Explicit launcher-authored inputs present in the frozen
@@ -153,5 +155,5 @@ server must be connected through the exact host-provided relay and descriptor,
 with reliable readiness and dispatch evidence. Native MCP configuration may be
 overridden by agent or managed settings, and the ordinary streaming history
 does not establish that readiness. The independently useful owned structured
-task path does not claim delegated control, live interactive coordination,
-account selection or per-model billing.
+task path does not claim delegated control, live interactive coordination or
+per-model billing.

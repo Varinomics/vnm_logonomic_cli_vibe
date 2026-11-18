@@ -1,4 +1,5 @@
 #include "vibe_launcher.h"
+#include "vibe_accounts.h"
 #include "vibe_config.h"
 #include "vibe_events.h"
 #include "vibe_export.h"
@@ -85,7 +86,7 @@ int main()
     options.adapter_name = "mistral-vibe-addon";
     options.adapter_version = "0.1.0";
     options.capabilities = {
-        {"presentation", 1}, {"launcher-discovery", 1}, {"launch-preparation", 3},
+        {"presentation", 1}, {"launcher-discovery", 1}, {"launch-preparation", 3}, {"accounts", 2},
         {"managed-configuration", 1}, {"lifecycle-events", 2}, {"helper-ingress", 2},
         {"lifecycle-correlation-lifetime", 1},
         {"model-state", 1}, {"child-state", 1},
@@ -101,6 +102,7 @@ int main()
         try {
             const auto& request = context.request();
             if (context.cancel_requested()) context.fail(addon::Result_status::CANCELLED, "cancelled");
+            else if (request.capability.capability_id == "accounts") vibe::handle_accounts(context);
             else if (request.capability.capability_id == "managed-configuration" && request.operation == "transform") transform(context);
             else if (request.capability.capability_id == "helper-ingress" && request.operation == "classify_event") classify(context, observer);
             else if (request.capability.capability_id == "lifecycle-events") observer.handle_observation(context);

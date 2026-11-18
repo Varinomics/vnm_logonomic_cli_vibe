@@ -1,4 +1,5 @@
 #include "vibe_launcher.h"
+#include "vibe_accounts.h"
 
 #include <logonomic_cli_addon/launch_preparation.h>
 #include <logonomic_cli_addon/launcher_discovery.h>
@@ -124,7 +125,7 @@ std::optional<fs::path> resolve_home(const addon::Environment& environment, std:
     std::error_code error;
     const auto canonical = fs::weakly_canonical(path, error);
     if (error || !canonical.is_absolute()) return std::nullopt;
-    return canonical;
+    return addon::normalized_resume_directory(addon::path_to_utf8(canonical));
 }
 
 std::optional<Native_program> verified_program(std::string_view executable,
@@ -242,6 +243,11 @@ void prepare(addon::Invocation_context& context)
     patch.disposition = addon::Launch_disposition{false, false, false};
     const auto parsed = invocation ? interactive_invocation(invocation->argv) : std::nullopt;
     const auto environment = addon::environment_pairs(request->launch_environment->effective_environment);
+    auto home = request->account_context ? resolve_home(environment, request->working_directory) : std::nullopt;
+    if (request->account_context && (!parsed || !matches_account(home, *request->account_context))) {
+        context.fail(addon::Result_status::UNAVAILABLE, "account_context_mismatch");
+        return;
+    }
     // Native startup resume can restore another cwd and configuration context.
     // Leave it and explicit cwd overrides unmanaged; exact host resume is
     // verified separately against its saved record and selected directory.
@@ -259,7 +265,7 @@ void prepare(addon::Invocation_context& context)
         context.succeed(addon::encode_launch_patch(patch, 3));
         return;
     }
-    const auto home = resolve_home(environment, request->working_directory);
+    if (!home) home = resolve_home(environment, request->working_directory);
     if (!home) {
         context.fail(addon::Result_status::UNAVAILABLE, "vibe_home_unavailable");
         return;
@@ -271,7 +277,8 @@ void prepare(addon::Invocation_context& context)
     }
     patch.disposition = addon::Launch_disposition{true, true, false};
     patch.apply_managed_configuration = true;
-    patch.set = {{"VNM_VIBE_HOOK", *helper}, {"VIBE_HOME", addon::path_to_utf8(*home)}};
+    patch.set = {{"VNM_VIBE_HOOK", *helper}};
+    if (!request->account_context) patch.set.emplace_back("VIBE_HOME", addon::path_to_utf8(*home));
     context.succeed(addon::encode_launch_patch(patch, 3));
 }
 

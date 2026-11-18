@@ -72,7 +72,7 @@ endfunction()
 
 add_library(vibe_provider STATIC src/vibe_launcher.cpp src/vibe_config.cpp src/vibe_events.cpp src/vibe_resume.cpp
     src/vibe_store.cpp src/vibe_observer.cpp src/vibe_context.cpp src/vibe_usage.cpp src/vibe_export.cpp
-    src/vibe_tasks.cpp)
+    src/vibe_tasks.cpp src/vibe_accounts.cpp)
 target_include_directories(vibe_provider PUBLIC src)
 target_link_libraries(vibe_provider PUBLIC logonomic_cli_addon_sdk::sdk)
 vibe_target(vibe_provider)

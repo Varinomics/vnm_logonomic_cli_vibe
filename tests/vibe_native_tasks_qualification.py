@@ -87,7 +87,7 @@ def run_case(case, root, adapter, harness, native, vibe, source_fixtures):
     profile = directory / "profile"
     for path in (home, workspace, profile):
         path.mkdir()
-    native_home = home / ".vibe"
+    native_home = directory / "selected Vibe profile"
     marker = directory / "foreground-hook-ran"
     if os.name == "nt":
         poison_hook = directory / "foreground-hook.cmd"
@@ -99,7 +99,7 @@ def run_case(case, root, adapter, harness, native, vibe, source_fixtures):
     environment = native.isolated_environment(home, native_home, vibe)
     environment["VNM_VIBE_HOOK"] = str(poison_hook)
 
-    def respond(index, _payload):
+    def respond(index, payload):
         if case == "approval-denied" and index == 0:
             return single_tool_call_chunks(
                 call_id="owned-denied-tool", tool_name="bash",
@@ -113,6 +113,9 @@ def run_case(case, root, adapter, harness, native, vibe, source_fixtures):
                     created=2, delta={}, finish_reason="refusal",
                     usage={"prompt_tokens": 3, "completion_tokens": 4}),
             ]
+        if any(message.get("role") == "user" and native.RESUME_PROMPT in str(message.get("content"))
+               for message in payload["messages"]):
+            return assistant_text_chunks(native.RESUME_ANSWER)
         return assistant_text_chunks(ANSWER)
 
     server = StreamingMockServer(chunk_factory=respond)
@@ -140,6 +143,7 @@ def run_case(case, root, adapter, harness, native, vibe, source_fixtures):
             "profile_storage": {"version": 1, "root": str(profile)},
             "prompt_base64": base64.b64encode(PROMPT.encode("utf-8")).decode("ascii"),
         }
+        request["account_context"] = native.selected_profile(adapter, request, native_home, home)
         prepared = success(adapter, "prepare", request)
         process = prepared["process"]
         require(process["executable"] == {"launcher_program": True} and
@@ -147,7 +151,8 @@ def run_case(case, root, adapter, harness, native, vibe, source_fixtures):
                 process["stdin"] == "payload" and process["stdin_payload"] == PROMPT.strip() and
                 process["start"] == "attached" and process["working_directory"] == "session_workspace",
                 "Owned process changed launcher policy, input channel, or native workspace")
-        require(prepared["profile_storage"] == request["profile_storage"] and
+        require(prepared["account_context"] == request["account_context"] and
+                prepared["profile_storage"] == request["profile_storage"] and
                 prepared["inspection"]["incremental"] and
                 not prepared["inspection"].get("keep_stdin_open", False), prepared)
         require(process["environment"] == {"VNM_VIBE_HOOK": ""} and
@@ -186,6 +191,11 @@ def run_case(case, root, adapter, harness, native, vibe, source_fixtures):
                 "Submitted public prompt was replaced by hidden guidance or unrelated history")
         require(all(entry["sessionId"] == starts[0]["sessionId"] for entry in entries),
                 "Owned stream unexpectedly mixed native session identities")
+        transcript = native_home / "logs" / "session" / "unified" / starts[0]["sessionId"]
+        require((transcript / "CURRENT").is_file() and not (home / ".vibe" / "logs").exists(),
+                "Owned task persisted outside its selected Vibe profile")
+        if case == "success":
+            qualify_profile_history(adapter, native, request, transcript, native_home, directory, server, adapter.package)
 
         state = prepared["inspection"]["protocol_state_base64_chunks"]
         trace = []
@@ -226,10 +236,64 @@ def run_case(case, root, adapter, harness, native, vibe, source_fixtures):
             "stream_records": len(entries), "model_requests": len(server.requests),
             "fragmented_inspections": len(trace) - 1,
             "foreground_hook_inactive": True, "native_permission_preserved": True,
-            "public_prompt_exact": True,
+            "public_prompt_exact": True, "selected_profile_verified": True,
         }
     finally:
         server.stop()
+
+
+def qualify_profile_history(adapter, native, task, transcript, native_home, directory, server, package):
+    request = {key: value for key, value in task.items() if key not in ("purpose", "prompt_base64")}
+    account = request["account_context"]
+    native_counts = native.public_state(transcript)["session"]["tokenUsage"]
+    candidate = Path(request["profile_storage"]["root"]) / "usage"
+    candidate.mkdir()
+    scan = dict(request, mode="incremental", snapshot_id=None, cursor=None,
+                cache_selection={"version": 1, "accepted": None, "candidate_root": str(candidate)})
+    first = native.success(adapter, "usage-scan", 3, "scan", scan)
+    item, = first["records"]
+    require(first["account_context"] == account and first["scope"]["source_account_key"] == account["adapter_account_key"]
+            and item["session_key"] == transcript.name and item["total_tokens"] == native_counts["totalTokens"]
+            and item["capabilities"]["usage-temporal"]["parent"]["source_account_key"] == account["adapter_account_key"],
+            "Usage or temporal coverage lost its selected native profile")
+    next_candidate = candidate.with_name("usage-next")
+    next_candidate.mkdir()
+    scan["cache_selection"] = {"version": 1, "accepted": first["cache_candidate"], "candidate_root": str(next_candidate)}
+    following = native.success(adapter, "usage-scan", 3, "scan", scan)
+    require(following["records"][0]["record_id"] == item["record_id"], "Repeated scan lost the native identity")
+    locator = {"version": 1, "provider_session_id": transcript.name, "vibe_home": str(native_home),
+               "transcript_path": str(transcript)}
+    resume = dict(request, resume={"version": 1, "record": locator})
+    inspected = native.success(adapter, "interactive-resume", 3, "inspect_resume", resume)
+    require(inspected["availability"] == "available", inspected)
+    resume["title_instruction"] = "Selected-profile resume qualification"
+    prepared = native.success(adapter, "interactive-resume", 2, "prepare_resume", resume)
+    require(prepared["account_context"] == account and "VIBE_HOME" not in prepared["environment"]["set"], prepared)
+    environment = dict(request["launch_environment"]["effective_environment"], **prepared["environment"]["set"])
+    process = prepared["process"]
+    resumed = subprocess.run([str(package / process["executable"]), *process["argv"], "--prompt", native.RESUME_PROMPT,
+                              "--max-turns", "2", "--output", "text"], cwd=request["working_directory"], env=environment,
+                             capture_output=True, text=True, encoding="utf-8", timeout=45)
+    require(resumed.returncode == 0 and native.RESUME_ANSWER in resumed.stdout and
+            any(msg.get("role") == "user" and "Implement the owned task." in str(msg.get("content"))
+                for msg in server.requests[-1]["messages"]), "The bridge did not restore the selected native conversation")
+    output = directory / "export"
+    output.mkdir()
+    export = {"provider_session_id": transcript.name, "resume_record": locator, "format": "text",
+              "working_directory": request["working_directory"], "launch_environment": request["launch_environment"],
+              "output_directory": str(output), "profile_storage": request["profile_storage"], "account_context": account}
+    result = native.success(adapter, "conversation-export", 2, "export", export)
+    discussion = (output / result["file_name"]).read_text("utf-8")
+    require(result["account_context"] == account and ANSWER in discussion and native.RESUME_ANSWER in discussion,
+            "Export lost the selected native conversation or its resumed answer")
+    rejected_output = directory / "other-profile-export"
+    rejected_output.mkdir()
+    foreign = dict(export, output_directory=str(rejected_output),
+                   account_context=dict(account, adapter_account_key="different-profile"))
+    refused = adapter.invoke("conversation-export", 2, "export", foreign)
+    require(refused["status"] == "unavailable" and not any(rejected_output.iterdir()),
+            "A mismatched selected profile exported native history")
+    write_json(directory / "selected-profile-history.json", {"usage": following, "resume": inspected, "export": result})
 
 
 def run(arguments):
@@ -262,7 +326,6 @@ def run(arguments):
             "native_version": version.stdout.strip(), "capability": "structured-session@3",
             "purpose": "implementation", "model_endpoint": "loopback-only dummy-key fixture",
             "cases": cases, "desktop_ui_qualification": False,
-            "delegated_mcp_control": "not implemented",
         }
         write_json(root / "result.json", summary)
         print(json.dumps(summary, indent=2))

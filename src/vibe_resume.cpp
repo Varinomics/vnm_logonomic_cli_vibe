@@ -1,4 +1,5 @@
 #include "vibe_resume.h"
+#include "vibe_accounts.h"
 #include "vibe_config.h"
 #include "vibe_launcher.h"
 
@@ -78,7 +79,7 @@ bool matches_home(const Resume_record& record, const addon::Session_launch_conte
     const auto environment = addon::environment_pairs(context.launch_environment->effective_environment);
     if (!addon::environment_value(environment, "VIBE_CWD").empty()) return false;
     const auto home = resolve_home(environment, context.working_directory);
-    if (!home) return false;
+    if (!home || (context.account_context && !matches_account(home, *context.account_context))) return false;
     std::error_code error;
     // Existing aliases (including Windows path casing) identify the same home.
     if (fs::equivalent(*home, record.home, error) && !error) return true;
@@ -176,13 +177,13 @@ void prepare(addon::Invocation_context& context)
     result.patch.account_context = request->context.account_context;
     result.patch.set = {
         {"VNM_VIBE_HOOK", *helper},
-        {"VIBE_HOME", addon::path_to_utf8(record->home)},
         // --resume looks up the ID in the current save_dir. Freeze the storage
         // root that supplied this record even if user/project settings changed.
         // Native Vibe also requires logging for resume; enable it in this
         // explicitly resumed process only, without editing persistent settings.
         {"VIBE_SESSION_LOGGING__SAVE_DIR", addon::path_to_utf8(record->transcript.parent_path().parent_path())},
         {"VIBE_SESSION_LOGGING__ENABLED", "true"}};
+    if (!request->context.account_context) result.patch.set.emplace_back("VIBE_HOME", addon::path_to_utf8(record->home));
     result.acknowledgment.record_digest_hex = addon::resume_record_digest_hex(request->resume_record);
     context.succeed(addon::encode_resume_prepare_result(result, 2));
 }

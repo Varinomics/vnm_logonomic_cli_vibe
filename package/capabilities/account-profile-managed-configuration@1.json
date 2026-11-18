@@ -1,0 +1,5 @@
+{
+  "capability_id": "account-profile-managed-configuration",
+  "version": 1,
+  "payload": {"managed_configuration_version": 1}
+}

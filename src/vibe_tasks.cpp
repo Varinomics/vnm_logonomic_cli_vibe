@@ -1,4 +1,5 @@
 #include "vibe_tasks.h"
+#include "vibe_accounts.h"
 #include "vibe_launcher.h"
 
 #include <logonomic_cli_addon/host_simulator.h>
@@ -142,14 +143,15 @@ void prepare(addon::Invocation_context& context)
     const auto request = addon::decode_structured_prepare_request(context.request().payload, &error);
     if (!request) { reject(context, error); return; }
     if (!purpose_supported(request->purpose, context)) return;
-    if (request->context.account_context) {
-        context.fail(addon::Result_status::UNAVAILABLE, "vibe_task_account_unavailable");
-        return;
-    }
     const auto& source = request->context;
     const auto invocation = addon::literal_launcher_invocation(source.launcher,
         source.launch_environment->platform_id, source.launcher_argv);
     const auto environment = addon::environment_pairs(source.launch_environment->effective_environment);
+    const auto selected_home = source.account_context ? resolve_home(environment, source.working_directory) : std::nullopt;
+    if (source.account_context && !matches_account(selected_home, *source.account_context)) {
+        context.fail(addon::Result_status::UNAVAILABLE, "account_context_mismatch");
+        return;
+    }
     const auto parsed = invocation ? interactive_invocation(invocation->argv) : std::nullopt;
     if (!parsed || parsed->initial_prompt || parsed->saved_session ||
         !addon::environment_value(environment, "VIBE_CWD").empty()) {
@@ -169,16 +171,17 @@ void prepare(addon::Invocation_context& context)
     }
     addon::Structured_prepare_result result;
     result.profile_storage = source.profile_storage;
+    result.account_context = source.account_context;
     result.process.executable = addon::Process_executable::launcher_program();
     result.process.argv = parsed->options;
     result.process.argv.insert(result.process.argv.end(), {"--output", "streaming", "-p"});
     result.process.stdin_behavior = addon::Stdin_behavior::PAYLOAD;
     result.process.stdin_payload = *prompt;
     for (const auto& [name, value] : environment) {
-        (void)value;
         const auto lower = addon::lower(name);
         // These names belong to the interactive helper's routing authority,
         // not to the newly owned headless process.
+        if (selected_home && lower == "vibe_home" && value.empty()) continue;
         if (!lower.starts_with("logonomic_") && !lower.starts_with("vnm_vibe_")) {
             result.process.environment_names.push_back(name);
         }
@@ -187,6 +190,11 @@ void prepare(addon::Invocation_context& context)
     // An explicit empty override keeps the managed hook inactive even when a
     // launcher was copied from an interactive session's environment.
     result.process.environment.emplace_back("VNM_VIBE_HOOK", "");
+    // A selected profile normally arrives through the host-owned selector. A
+    // key-only request can select the platform default without that variable.
+    if (selected_home && addon::environment_value(environment, "VIBE_HOME").empty()) {
+        result.process.environment.emplace_back("VIBE_HOME", addon::path_to_utf8(*selected_home));
+    }
     Task_state state;
     state.prompt_digest = digest(*prompt);
     result.inspection.incremental = true;

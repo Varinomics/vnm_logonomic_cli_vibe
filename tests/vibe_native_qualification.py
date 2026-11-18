@@ -57,6 +57,16 @@ def supports(adapter, capability, version):
                for item in adapter.capabilities_frame["capabilities"])
 
 
+def selected_profile(adapter, preparation, native_home, fallback):
+    request = {"launcher": preparation["launcher"], "launch_environment": preparation["launch_environment"],
+               "normalization_directory": preparation["working_directory"], "default_home_fallback": str(fallback)}
+    account, = success(adapter, "accounts", 2, "discover", request)["accounts"]
+    resolved = success(adapter, "accounts", 2, "resolve", request)
+    require(account["adapter_account_key"] == resolved["adapter_account_key"] and
+            account["status"] == "available" and Path(account["profile_path"]) == native_home, account)
+    return {"version": 2, **resolved, "profile_path": account["profile_path"]}
+
+
 def reserve_correlation(adapter, nonce):
     if supports(adapter, "lifecycle-correlation-lifetime", 1):
         success(adapter, "lifecycle-correlation-lifetime", 1, "reserve", {"transition_nonce": nonce})
@@ -258,7 +268,8 @@ def qualify_native_accounting(adapter, preparation, record, stage, previous=None
                     "cache_selection": {"version": 1, "accepted": previous, "candidate_root": str(candidate)}})
     usage = success(adapter, "usage-scan", 3, "scan", request)
     require(usage["complete"] and usage["incomplete_historical_coverage"] and
-            usage["profile_storage"] == request["profile_storage"], usage)
+            usage["profile_storage"] == request["profile_storage"] and usage["account_context"] == request["account_context"] and
+            usage["scope"]["source_account_key"] == request["account_context"]["adapter_account_key"], usage)
     records = {item["session_key"]: item for item in usage["records"]}
     for path in session.parent.iterdir():
         if not path.is_dir() or not (path / "CURRENT").is_file():
@@ -270,7 +281,8 @@ def qualify_native_accounting(adapter, preparation, record, stage, previous=None
         require(item["total_tokens"] == counts["totalTokens"] and
                 item["input"]["value"] == counts["inputTokens"] and
                 item["output"]["value"] == counts["outputTokens"] and
-                item["semantics"] == "cumulative-final" and "model" not in item,
+                item["semantics"] == "cumulative-final" and "model" not in item and
+                item["capabilities"]["usage-temporal"]["parent"]["source_account_key"] == usage["scope"]["source_account_key"],
                 "Usage scan changed native cumulative counters or attributed a selected model to billing")
         require(item["cache_read"]["coverage"]["support"] == "unknown" and
                 item["cache_creation"]["coverage"]["support"] == "unknown",
@@ -304,7 +316,7 @@ def qualify_native_export(adapter, root, preparation, record):
                 "working_directory": preparation["working_directory"],
                 "launch_environment": preparation["launch_environment"],
                 "output_directory": str(output), "format": format_name, "compact": compact,
-                "profile_storage": preparation["profile_storage"],
+                "profile_storage": preparation["profile_storage"], "account_context": preparation["account_context"],
             })
             artifact = output / result["file_name"]
             text = artifact.read_text("utf-8")
@@ -316,7 +328,8 @@ def qualify_native_export(adapter, root, preparation, record):
                         "Full export dropped a native structured tool result")
             require(result["bytes"] == artifact.stat().st_size and result["message_count"] > 0 and
                     not result["incomplete_tail_omitted"] and result.get("compact", False) == compact and
-                    result["profile_storage"] == preparation["profile_storage"],
+                    result["profile_storage"] == preparation["profile_storage"] and
+                    result["account_context"] == preparation["account_context"],
                     "Export descriptor did not match the completed native history or artifact")
             descriptors.append(result)
     require(file_hashes(Path(record["vibe_home"])) == before, "Conversation export changed native history")
@@ -382,7 +395,7 @@ def run(arguments):
     root = arguments.output_directory.resolve()
     root.mkdir(parents=True, exist_ok=False)
     home = root / "home"
-    native_home = home / ".vibe"
+    native_home = root / "selected Vibe profile"
     workspace = root / "workspace"
     profile = root / "profile"
     deliveries = root / "deliveries"
@@ -456,7 +469,9 @@ def run(arguments):
             "working_directory": str(workspace), "title_instruction": "Native Vibe qualification",
             "declared_assets": [], "profile_storage": {"version": 1, "root": str(profile)},
         }
+        preparation["account_context"] = selected_profile(adapter, preparation, native_home, home)
         patch = success(adapter, "launch-preparation", 3, "prepare", preparation)
+        require(patch["account_context"] == preparation["account_context"] and "VIBE_HOME" not in patch["environment"]["set"], patch)
         require(patch["disposition"]["lifecycle_events"], patch)
         require(patch["apply_managed_configuration"], patch)
         transformed = success(adapter, "managed-configuration", 1, "transform", {
@@ -535,6 +550,8 @@ def run(arguments):
         require(inspected["availability"] == "available", inspected)
         prepared = success(adapter, "interactive-resume", 2, "prepare_resume", resume_request)
         require(prepared["process"]["argv"][-2:] == ["--resume", record["provider_session_id"]], prepared)
+        require(prepared["account_context"] == preparation["account_context"] and
+                "VIBE_HOME" not in prepared["environment"]["set"], prepared)
         require(file_hashes(native_home) == before_inspection, "Resume preflight modified native data")
         write_json(root / "resume-inspection.json", inspected)
         write_json(root / "resume-preparation.json", prepared)
@@ -542,19 +559,28 @@ def run(arguments):
         resume_environment = dict(launch_environment)
         resume_environment.update(prepared["environment"]["set"])
         process = prepared["process"]
-        child = pexpect.spawn(
-            str(package / process["executable"]), process["argv"], cwd=str(workspace),
-            env=resume_environment, encoding="utf-8", timeout=30,
-            dimensions=(TERMINAL_ROWS, TERMINAL_COLUMNS),
-        )
-        child.logfile_read = captured
-        wait_for_main_screen(child, timeout=20)
-        child.send(RESUME_PROMPT + "\r")
-        wait_for_rendered_text(child, captured, needle=RESUME_ANSWER, timeout=20)
-        send_ctrl_c_until_quit_confirmation(child, captured, timeout=5)
-        child.expect(pexpect.EOF, timeout=10)
-        child.close()
-        require(child.exitstatus == 0, f"Interactive bridge exited {child.exitstatus}/{child.signalstatus}")
+        if arguments.headless_resume:
+            completed = subprocess.run(
+                [str(package / process["executable"]), *process["argv"], "--prompt", RESUME_PROMPT,
+                 "--max-turns", "2", "--output", "text"], cwd=workspace, env=resume_environment,
+                capture_output=True, text=True, timeout=60)
+            captured.write(completed.stdout)
+            require(completed.returncode == 0 and RESUME_ANSWER in completed.stdout,
+                    "The bridge did not resume the native saved task headlessly")
+        else:
+            child = pexpect.spawn(
+                str(package / process["executable"]), process["argv"], cwd=str(workspace),
+                env=resume_environment, encoding="utf-8", timeout=30,
+                dimensions=(TERMINAL_ROWS, TERMINAL_COLUMNS),
+            )
+            child.logfile_read = captured
+            wait_for_main_screen(child, timeout=20)
+            child.send(RESUME_PROMPT + "\r")
+            wait_for_rendered_text(child, captured, needle=RESUME_ANSWER, timeout=20)
+            send_ctrl_c_until_quit_confirmation(child, captured, timeout=5)
+            child.expect(pexpect.EOF, timeout=10)
+            child.close()
+            require(child.exitstatus == 0, f"Interactive bridge exited {child.exitstatus}/{child.signalstatus}")
         latest = server.requests[-1]
         require(TITLE_GUIDANCE in str(latest["messages"]),
                 "Native resume did not carry the host-provided model guidance")
@@ -582,7 +608,8 @@ def run(arguments):
             "root_session_id": record["provider_session_id"], "child_name": SUBAGENT_NAME,
             "child_turn_id": outcome["turn_id"], "child_states": ["running", "idle"],
             "model_requests": len(server.requests), "resume_availability": inspected["availability"],
-            "interactive_exact_resume": True, "native_store": str(session),
+            "interactive_exact_resume": not arguments.headless_resume, "headless_exact_resume": arguments.headless_resume,
+            "selected_profile_verified": True, "native_store": str(session),
             "subagent_observer": observer_result,
             "native_model_report": models[0],
             "native_execution_directory": directories[0],
@@ -601,7 +628,7 @@ def run(arguments):
             child.terminate(force=True)
         if child is not None and not child.closed:
             child.close()
-        (root / "interactive.txt").write_text(captured.getvalue(), encoding="utf-8")
+        (root / ("headless-resume.txt" if arguments.headless_resume else "interactive.txt")).write_text(captured.getvalue(), encoding="utf-8")
         write_json(root / "requests.json", server.requests)
         server.stop()
         if adapter is not None:
@@ -614,6 +641,7 @@ def main():
     parser.add_argument("--vibe-source", type=Path, required=True)
     parser.add_argument("--package", type=Path, required=True)
     parser.add_argument("--output-directory", type=Path, required=True)
+    parser.add_argument("--headless-resume", action="store_true", help="Resume through the packaged bridge using native prompt mode.")
     arguments = parser.parse_args()
     try:
         run(arguments)

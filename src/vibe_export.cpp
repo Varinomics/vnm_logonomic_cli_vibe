@@ -1,5 +1,6 @@
 #include "vibe_export.h"
 
+#include "vibe_accounts.h"
 #include "vibe_launcher.h"
 #include "vibe_resume.h"
 #include "vibe_store.h"
@@ -265,16 +266,17 @@ addon::Conversation_message render_entry(const addon::Json_value& entry)
 
 fs::path locate(const addon::Conversation_export_request& request)
 {
-    require(!request.account_context, "vibe_export_account_unavailable");
     const auto record = request.resume_record ? decode_resume_record(*request.resume_record) : std::nullopt;
     require(record && record->session_id == request.provider_session_id, "vibe_export_source_unavailable");
     const auto environment = addon::environment_pairs(request.launch_environment.effective_environment);
     // Export can outlive the original working directory. The retained source
     // locator and frozen home bind identity; resume eligibility is irrelevant.
     const auto home = resolve_home(environment, addon::path_to_utf8(record->home));
+    require(!request.account_context || matches_account(home, *request.account_context), "account_context_mismatch");
     std::error_code error;
     const auto recorded_home = fs::weakly_canonical(record->home, error);
-    require(home && !error && *home == recorded_home, "vibe_export_home_mismatch");
+    require(home && !error && (*home == recorded_home || fs::equivalent(*home, recorded_home, error)),
+        "vibe_export_home_mismatch");
     return record->transcript;
 }
 
@@ -347,7 +349,7 @@ void handle_export(addon::Invocation_context& context)
                 const auto& reason = failure->reason_code;
                 if (reason == "vibe_export_journal_pending" || reason == "vibe_export_unsettled_history" ||
                     reason == "vibe_export_source_unavailable" || reason == "vibe_export_home_mismatch" ||
-                    reason == "vibe_export_account_unavailable")
+                    reason == "account_context_mismatch")
                 {
                     failure->detail = reason;
                     failure->reason_code = "conversation_source_unavailable";

@@ -1,5 +1,6 @@
 #include "vibe_usage.h"
 
+#include "vibe_accounts.h"
 #include "vibe_launcher.h"
 #include "vibe_store.h"
 
@@ -135,6 +136,12 @@ Saved_record decode_saved(const addon::Json_value& value)
 }
 
 using Records = std::map<std::string, Saved_record>;
+
+std::optional<std::string> source_account_key(const addon::Usage_scan_request& request)
+{
+    if (request.context.account_context) return request.context.account_context->adapter_account_key;
+    return std::nullopt;
+}
 
 Records load_records(const fs::path& root, addon::Invocation_context& context)
 {
@@ -397,7 +404,7 @@ Snapshot load_snapshot(const addon::Usage_scan_request& request, addon::Invocati
     const auto metadata = parse(read_file(root / "metadata.json", k_cache_line_bytes));
     const auto* scope = metadata.find("scope");
     const auto observation = scope ? addon::decode_observation_scope(*scope, &failure) : std::nullopt;
-    require(observation && !observation->source_account_key, "vibe_usage_cache_invalid");
+    require(observation && observation->source_account_key == source_account_key(request), "vibe_usage_cache_invalid");
     snapshot.scope = *observation;
     snapshot.request_sha256 = text(metadata, "request_sha256");
     require(snapshot.request_sha256 == request_digest(request), "vibe_usage_snapshot_context_changed");
@@ -418,6 +425,7 @@ Snapshot create_snapshot(const addon::Usage_scan_request& request, addon::Invoca
     snapshot.scope.observed_at_ms = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count());
     snapshot.scope.fresh_for_ms = 60000;
+    snapshot.scope.source_account_key = source_account_key(request);
     const auto id = "vibe-usage:" + digest(snapshot.request_sha256 + ":" + std::to_string(snapshot.scope.observed_at_ms));
     if (request.cache_selection->accepted) {
         validate_cache(*request.cache_selection->accepted, request, context);
@@ -431,7 +439,7 @@ Snapshot create_snapshot(const addon::Usage_scan_request& request, addon::Invoca
     for (auto& [key, saved] : snapshot.records) {
         check_cancel(context);
         addon::Usage_temporal temporal;
-        temporal.parent = {key, saved.usage.total_tokens, id, std::nullopt};
+        temporal.parent = {key, saved.usage.total_tokens, id, snapshot.scope.source_account_key};
         temporal.unavailable_tokens = saved.usage.total_tokens;
         temporal.coverage_reason = "unsupported";
         saved.usage.temporal = std::move(temporal);
@@ -508,8 +516,11 @@ void handle_usage_scan(addon::Invocation_context& context)
         return;
     }
     if (request->context.account_context) {
-        context.fail(addon::Result_status::UNAVAILABLE, "vibe_usage_account_unavailable");
-        return;
+        const auto environment = addon::environment_pairs(request->context.launch_environment->effective_environment);
+        if (!matches_account(resolve_home(environment, request->context.working_directory), *request->context.account_context)) {
+            context.fail(addon::Result_status::UNAVAILABLE, "account_context_mismatch");
+            return;
+        }
     }
     try {
         check_cancel(context);

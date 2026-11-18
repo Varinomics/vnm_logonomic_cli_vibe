@@ -21,6 +21,8 @@ fail their affected capability when the store contract is unfamiliar.
 | `presentation@1` | Mistral Vibe display name and an original package icon. |
 | `launcher-discovery@1` | Finds an installed `vibe` on the supplied search path, with a `.local/bin` fallback, and recognizes supported literal interactive invocations. |
 | `launch-preparation@3` | Probes the selected executable's version and proposes the environment and managed configuration required for hooks. |
+| `accounts@2` | Discovers and resolves the native filesystem profile selected by a Vibe launcher, including a custom `VIBE_HOME`. |
+| `account-profile-managed-configuration@1` | Binds hook installation to the selected profile retained by the host. |
 | `managed-configuration@1` | Adds four owned hooks to `VIBE_HOME/hooks.toml` through the host's configuration transaction. |
 | `lifecycle-events@2` | Native session start/resume/end, confirmed root working status, inferred root completion/attention hints, and continuous observation of native child runs. |
 | `helper-ingress@2` | Delivers bounded native hook events through the SDK helper client and checks the host's active session ledger. |
@@ -39,7 +41,7 @@ fail their affected capability when the store contract is unfamiliar.
 | `interactive-resume@2` | Prepares the original full session ID with its native home and storage root, preserving supported launcher options. |
 | `interactive-resume@3` | Reads bounded native metadata and generation witnesses to inspect remembered-session availability without modifying history. |
 
-Account selection/authentication probes, quotas, Logonomic-launched delegated
+Authentication probes, quotas, Logonomic-launched delegated
 tasks, read-only structured review, ongoing coordination delivery, paired
 approvals, authoritative root turn outcomes, and mid-session worktree changes
 remain unimplemented.
@@ -66,6 +68,14 @@ It preserves native `--enabled-tools` and `--disabled-tools` selections, includi
 repeated flags, for interactive launches, exact resumes, and implementation tasks.
 Exact remembered-session resume replaces an old resume/continue selector and
 removes the original startup prompt so it is not submitted a second time.
+
+Vibe selects one configuration directory per launcher. An absolute
+`VIBE_HOME` selects a custom profile, and the default is the user's
+`.vibe` directory. Logonomic retains the profile for hook installation,
+owned tasks, resume, export and usage scans. Vibe has no catalogue of other
+arbitrary directories selected by different launchers. A profile identifies
+the local source containing the history. Remote sign-in and billing identity
+require independent evidence.
 
 An ordinary launch that already contains `--resume`, `--continue`, or `-c` is
 recognized but left unmanaged: native Vibe can restore a different working
@@ -210,8 +220,8 @@ optional model report stays unavailable.
 This capability declares only the implementation purpose. Read-only review is
 unavailable because Vibe's `ask` approval mode does not enforce a read-only tool
 policy. The provider does not add automatic approval. Saved-session selectors,
-an existing launcher prompt, explicit cwd overrides, and selected-account
-contexts are refused for this fresh-task route. Delegated task-server relays
+an existing launcher prompt, and explicit cwd overrides are refused for this
+fresh-task route. Owned tasks retain the selected native profile. Delegated task-server relays
 remain a separate unimplemented capability.
 
 See [owned task contracts](docs/native_owned_tasks.md) for native source,
@@ -311,6 +321,8 @@ identities and selected cache reuse, and all three full/compact export formats. 
 excludes hidden model guidance. The scripted endpoint establishes native
 transport and data behavior; it does not establish that a model obeys title or
 summary instructions. No paid model backend is needed by this qualification.
+Passing `--headless-resume` exercises the same saved conversation and bridge
+through Vibe's native prompt mode. Both modes run in a custom selected profile.
 
 The headless owned-task qualification runs on Windows and Linux with the same native version and local
 endpoint for successful completion, an actual native model refusal, and a tool

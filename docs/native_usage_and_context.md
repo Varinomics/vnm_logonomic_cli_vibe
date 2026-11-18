@@ -47,7 +47,10 @@ are still unavailable. This decision does not depend on directory ordering.
 Other project, agent, and managed
 configuration roots, legacy logs, deleted unobserved sessions, and unsaved
 sessions are outside this discovery scope. The result therefore always declares
-incomplete historical coverage. It does not claim selected-account attribution.
+incomplete historical coverage. For a selected filesystem profile the scan,
+temporal parent and accepted cache share the same source account key. Profiles
+can reference a custom log directory. A stored session cannot establish which
+remote principal was signed in when it ran.
 
 The current accounting fields have these meanings:
 
@@ -271,8 +274,9 @@ probes. However, they are session-scoped APIs, and
 may reconcile tenant configuration after the lookup. A probe must establish
 frozen provider/account scope, native credential custody, permitted effects,
 timeouts, and redacted result mapping; it must not present another independently
-opened session's account as the interactive session's current account. No
-account-selection catalogue has been adopted by this package.
+opened session's account as the interactive session's current account. The
+package independently resolves the local profile selected by the launcher's
+native `VIBE_HOME` or platform default through `accounts@2`.
 
 Fresh Logonomic-owned tasks are a separate route and do not need to observe the
 interactive session. Native `-p` reads the prompt from stdin when no prompt
