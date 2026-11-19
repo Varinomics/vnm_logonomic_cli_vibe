@@ -90,7 +90,7 @@ public:
     explicit Store_fixture(std::string_view id = "root-session")
     {
         static std::uint64_t unique = 0;
-        root = fs::temp_directory_path() / ("vibe-store-test-" +
+        root = fs::canonical(fs::temp_directory_path()) / ("vibe-store-test-" +
             std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "-" + std::to_string(++unique));
         transcript = root / "unified" / std::string(id);
         fs::create_directories(transcript / "generations");

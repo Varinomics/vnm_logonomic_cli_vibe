@@ -170,7 +170,7 @@ class ProtocolTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="vibe-protocol-")
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve(strict=True)
         self.home = self.root / "home with spaces"
         self.home.mkdir()
         self.workspace = self.root / "workspace"
