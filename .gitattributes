@@ -4,5 +4,8 @@
 *.json text eol=lf
 *.py text eol=lf
 *.yml text eol=lf
+# These files are copied verbatim into the provider package.
+/package/assets/* -text
+/package/notices/* -text
 # Configuration compares this notice byte-for-byte with upstream's LF LICENSE.
 package/notices/tomlplusplus-LICENSE.txt text eol=lf
