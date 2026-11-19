@@ -1,0 +1,13 @@
+{
+  "upstream": "https://github.com/lobehub/lobe-icons",
+  "snapshot": "4aaf4ee1fb2678a7f989ea570f0f6ce14a9abf75",
+  "source_path": "packages/static-svg/icons/mistral-color.svg",
+  "source_sha256": "722f74b289d95486b43662fe24fa883b333701296f618406cd0ed502299170b6",
+  "license": "MIT",
+  "notice": "notices/lobe_icons_mit.txt",
+  "resources": ["assets/vibe.svg"],
+  "changes": [
+    "Removed browser layout styling and replaced 1em dimensions with 24 for the Logonomic SVG subset.",
+    "Preserved the viewBox, path data, and fills."
+  ]
+}
