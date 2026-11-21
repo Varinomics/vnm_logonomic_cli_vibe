@@ -3,7 +3,7 @@
 Native Logonomic integration for an installed [Mistral Vibe](https://github.com/mistralai/mistral-vibe)
 CLI, built with the [Logonomic CLI add-on SDK](https://github.com/Varinomics/vnm_logonomic_cli_addon/tree/master/sdk/logonomic_cli_addon_sdk).
 
-**Package:** `logonomic.cli.vibe` · **Version:** `0.1.0` · **Minimum Vibe:** `3.1.1`
+**Package:** `logonomic.cli.vibe` · **Minimum Vibe:** `3.1.1`
 
 The package discovers Vibe, prepares its native hooks, tracks the foreground
 conversation and observed child runs, reports native context evidence,
@@ -269,24 +269,20 @@ Send provider pull requests to [the vibe repository](https://github.com/Varinomi
 
 Required tools:
 
-- A C++20 compiler, CMake 3.25+, Git, and Ninja for the commands below.
-- Python 3.11+ for contract tests and package tooling.
-- Read access to `Varinomics/vnm_logonomic_cli_addon` or a local SDK checkout.
-- On Linux, the SDK runtime packaging tools: `patchelf`, `binutils`, and valid
-  Debian/Ubuntu package metadata for the runtime libraries being shipped.
+- A C++20 compiler, CMake, Git, and Ninja for the build below.
+- Python 3.11+ for Vibe's contract tests.
+- The SDK's [Linux packaging prerequisites](https://github.com/Varinomics/vnm_logonomic_cli_addon/blob/master/sdk/logonomic_cli_addon_sdk/docs/package_contract.md#linux-native-runtime-deployment) when building on Linux.
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel 4
 ctest --test-dir build --output-on-failure
-cmake --install build --prefix "$PWD/artifacts/vibe-0.1.0"
+cmake --install build --prefix "$PWD/artifacts/vibe"
 ```
 
 The single-configuration build produces
 `build/package/logonomic.cli.vibe`. The export above produces
-`artifacts/vibe-0.1.0/logonomic.cli.vibe`. Choose an absent per-package export
-destination: the SDK intentionally refuses to overwrite an existing one.
-Application package ingestion owns installed-generation updates.
+`artifacts/vibe/logonomic.cli.vibe`. See [SDK package export](https://github.com/Varinomics/vnm_logonomic_cli_addon/blob/master/sdk/logonomic_cli_addon_sdk/docs/package_contract.md#exporting-a-package) for the destination requirements.
 
 With a multi-configuration generator, use `--config Release` for build/install,
 `-C Release` for CTest, and find the package under
@@ -321,7 +317,7 @@ Native contract fixtures cover unavailable and malformed evidence, replay,
 pagination, counter regressions, source conflicts, provisional history,
 structured tool results, role-correct discarded content, and cancellation.
 
-Linux qualification runs the official Vibe **3.1.2** executable against the
+The Linux qualification exercised the official Vibe **3.1.2** executable against the
 upstream account-free localhost scripted model endpoint. It exercises real
 native parent/child turns, hook delivery, persisted child observations, exact
 interactive resume through the packaged bridge, root model availability and
@@ -354,14 +350,4 @@ The minimum hook behavior was checked against the Vibe `v3.1.1` tag. A newer
 semantic version can pass the version gate; its compatibility still depends on
 the native hook and store contracts.
 
-### CI setup
-
-[`Provider CI`](.github/workflows/ci.yml) runs only when dispatched manually. It
-calls the organization's reusable `cli-addon-provider.yml` workflow with
-`provider: vibe`. The repository must have access to the existing
-**`VARINOMICS_REPO_READ_TOKEN`** secret, including read access to this
-repository and the private repositories used by the maintainer workflow.
-
-A checkout failure with `Input required and not supplied: token` means the
-workflow did not receive that secret. Enable the secret for this repository,
-then rerun the workflow. This failure occurs before compilation or tests.
+The [provider workflow](.github/workflows/ci.yml) declares its maintainer inputs.

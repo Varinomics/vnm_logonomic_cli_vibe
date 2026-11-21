@@ -84,7 +84,7 @@ int main()
     vibe::Observer observer;
     addon::Adapter_runtime_options options;
     options.adapter_name = "mistral-vibe-addon";
-    options.adapter_version = "0.1.0";
+    options.adapter_version = LOGONOMIC_CLI_ADDON_ADAPTER_VERSION;
     options.capabilities = {
         {"presentation", 1}, {"launcher-discovery", 1}, {"launch-preparation", 3}, {"accounts", 2},
         {"managed-configuration", 1}, {"lifecycle-events", 2}, {"helper-ingress", 2},
