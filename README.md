@@ -266,6 +266,7 @@ built-in agents.
 
 The [contributor guide](https://github.com/Varinomics/vnm_logonomic_cli_addon/blob/master/CONTRIBUTING.md) covers local package checks.
 Send provider pull requests to [the vibe repository](https://github.com/Varinomics/vnm_logonomic_cli_vibe/pulls).
+See the [repository license](LICENSE) for the terms covering Varinomics code.
 
 Required tools:
 

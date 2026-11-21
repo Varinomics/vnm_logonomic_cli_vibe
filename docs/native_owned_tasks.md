@@ -52,7 +52,7 @@ submitted public prompt.
 These behaviors follow the native
 [programmatic-mode contract](https://github.com/mistralai/mistral-vibe/blob/b20313e01d6926d4191da89c32d5da11e3a0a060/docs/programmatic-mode.md)
 and the provider's SDK
-[structured-session@3 contract](https://github.com/Varinomics/logonomic/blob/5954beb1b31b8784d2baf9c1b8d72b4e5a846c3e/sdk/logonomic_cli_addon_sdk/docs/structured_session_3.md).
+[structured-session@3 contract](https://github.com/Varinomics/vnm_logonomic_cli_addon/blob/master/sdk/logonomic_cli_addon_sdk/docs/structured_session_3.md).
 
 ## Exact input and native output
 

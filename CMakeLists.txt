@@ -95,6 +95,7 @@ logonomic_cli_addon_package_platform(VIBE_PLATFORM)
 set(VIBE_EXECUTABLE_SUFFIX "${CMAKE_EXECUTABLE_SUFFIX}")
 configure_file(package/logonomic-cli-addon.json.in generated/logonomic-cli-addon.json @ONLY)
 logonomic_cli_addon_add_package(vibe_package logonomic.cli.vibe VIBE_PACKAGE_DIRECTORY
+    PROJECT_LICENSE LICENSE
     ADAPTER vibe_adapter HELPERS logonomic_vibe_hook vibe_launch_bridge
     INDEX_ARGUMENTS --third-party "adapter/vibe_adapter${CMAKE_EXECUTABLE_SUFFIX}"
         "notices/tomlplusplus-LICENSE.txt" "provenance/tomlplusplus.json"
