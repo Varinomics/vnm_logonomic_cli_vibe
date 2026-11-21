@@ -248,7 +248,7 @@ Native `pre_agent` can also accept `additional_context`, but its
 always generates a visible added-context notice. Its payload also does not carry
 the Logonomic activation nonce captured at session start. Looking up the host's
 current nonce when a delayed hook arrives would not satisfy the SDK's
-[`model-context-delivery@2`](https://github.com/Varinomics/logonomic/blob/master/sdk/logonomic_cli_addon_sdk/docs/model_context_delivery_2.md)
+[`model-context-delivery@2`](https://github.com/Varinomics/vnm_logonomic_cli_addon/blob/master/sdk/logonomic_cli_addon_sdk/docs/model_context_delivery_2.md)
 contract. A future per-turn hook route needs both
 source-captured attribution and a qualified native presentation path. On an
 owned live connection, `session/context/inject` and state-appropriate
@@ -262,7 +262,7 @@ the deferred move can still be dropped. See `enter_worktree`,
 `_move_session`, and `_announce_cwd` in the
 [`backend adapter`](https://github.com/mistralai/mistral-vibe/blob/b20313e01d6926d4191da89c32d5da11e3a0a060/vibe/app_server/_unified_harness_backend_adapter.py).
 The SDK's
-[`execution-context@1`](https://github.com/Varinomics/logonomic/blob/master/sdk/logonomic_cli_addon_sdk/docs/execution_context_1.md)
+[`execution-context@1`](https://github.com/Varinomics/vnm_logonomic_cli_addon/blob/master/sdk/logonomic_cli_addon_sdk/docs/execution_context_1.md)
 requires the actual default directory plus a
 source-captured activation and sequence. Transcript metadata, per-command
 directories, and launch input do not meet that contract. Until an attributed
@@ -280,9 +280,9 @@ see
 Native `account/read` can return ready, missing-key, unauthorized, or unavailable
 state and a monthly Vibe Code budget with usage percentage and reset time.
 These are real upstream sources for future
-[`auth-status@2`](https://github.com/Varinomics/logonomic/blob/master/sdk/logonomic_cli_addon_sdk/docs/auth_status_2.md)
+[`auth-status@2`](https://github.com/Varinomics/vnm_logonomic_cli_addon/blob/master/sdk/logonomic_cli_addon_sdk/docs/auth_status_2.md)
 and
-[`quota@2`](https://github.com/Varinomics/logonomic/blob/master/sdk/logonomic_cli_addon_sdk/docs/quota_2.md)
+[`quota@2`](https://github.com/Varinomics/vnm_logonomic_cli_addon/blob/master/sdk/logonomic_cli_addon_sdk/docs/quota_2.md)
 probes. However, they are session-scoped APIs, and
 [`AccountController.read`](https://github.com/mistralai/mistral-vibe/blob/b20313e01d6926d4191da89c32d5da11e3a0a060/vibe/app_server/_account.py)
 may reconcile tenant configuration after the lookup. A probe must establish

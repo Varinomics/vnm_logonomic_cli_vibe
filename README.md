@@ -1,7 +1,7 @@
 # Mistral Vibe CLI add-on for Logonomic
 
 Native Logonomic integration for an installed [Mistral Vibe](https://github.com/mistralai/mistral-vibe)
-CLI, built with the public [Logonomic CLI add-on SDK](https://github.com/Varinomics/logonomic/tree/master/sdk/logonomic_cli_addon_sdk).
+CLI, built with the [Logonomic CLI add-on SDK](https://github.com/Varinomics/vnm_logonomic_cli_addon/tree/master/sdk/logonomic_cli_addon_sdk).
 
 **Package:** `logonomic.cli.vibe` · **Version:** `0.1.0` · **Minimum Vibe:** `3.1.1`
 
@@ -264,11 +264,14 @@ built-in agents.
 
 ## Build and package
 
+The [contributor guide](https://github.com/Varinomics/vnm_logonomic_cli_addon/blob/master/CONTRIBUTING.md) covers local package checks.
+Send provider pull requests to [the vibe repository](https://github.com/Varinomics/vnm_logonomic_cli_vibe/pulls).
+
 Required tools:
 
 - A C++20 compiler, CMake 3.25+, Git, and Ninja for the commands below.
 - Python 3.11+ for contract tests and package tooling.
-- Read access to `Varinomics/logonomic`, which supplies the public SDK source.
+- Read access to `Varinomics/vnm_logonomic_cli_addon` or a local SDK checkout.
 - On Linux, the SDK runtime packaging tools: `patchelf`, `binutils`, and valid
   Debian/Ubuntu package metadata for the runtime libraries being shipped.
 
@@ -294,7 +297,7 @@ branches. Existing or pinned source checkouts can be supplied explicitly:
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-  -DLOGONOMIC_CLI_ADDON_SDK_SOURCE=/absolute/path/to/logonomic/sdk/logonomic_cli_addon_sdk \
+  -DLOGONOMIC_CLI_ADDON_SDK_SOURCE=/absolute/path/to/vnm_logonomic_cli_addon/sdk/logonomic_cli_addon_sdk \
   -DVIBE_TOMLPLUSPLUS_SOURCE=/absolute/path/to/tomlplusplus
 ```
 
@@ -357,7 +360,7 @@ the native hook and store contracts.
 calls the organization's reusable `cli-addon-provider.yml` workflow with
 `provider: vibe`. The repository must have access to the existing
 **`VARINOMICS_REPO_READ_TOKEN`** secret, including read access to this
-repository and the private Logonomic SDK repository.
+repository and the private repositories used by the maintainer workflow.
 
 A checkout failure with `Input required and not supplied: token` means the
 workflow did not receive that secret. Enable the secret for this repository,
