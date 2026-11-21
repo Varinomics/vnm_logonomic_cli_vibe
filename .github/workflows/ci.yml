@@ -8,8 +8,6 @@ permissions:
 
 jobs:
   provider:
-    uses: Varinomics/logonomic/.github/workflows/cli-addon-provider.yml@master
+    uses: Varinomics/vnm_logonomic_cli_addon/.github/workflows/provider-standalone.yml@master
     with:
       provider: vibe
-    secrets:
-      VARINOMICS_REPO_READ_TOKEN: ${{ secrets.VARINOMICS_REPO_READ_TOKEN }}
