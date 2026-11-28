@@ -1,5 +1,6 @@
 #include "vibe_tasks.h"
 #include "vibe_accounts.h"
+#include "vibe_config.h"
 #include "vibe_launcher.h"
 
 #include <logonomic_cli_addon/host_simulator.h>
@@ -131,9 +132,10 @@ void reject(addon::Invocation_context& context, const addon::Contract_failure& e
 
 bool purpose_supported(addon::Structured_purpose purpose, addon::Invocation_context& context)
 {
-    if (purpose == addon::Structured_purpose::IMPLEMENTATION) return true;
-    context.fail(addon::Result_status::UNAVAILABLE, "purpose_unavailable",
-        "The native headless CLI does not establish the requested read-only tool policy.");
+    const bool authoring = context.request().capability.capability_id == "authoring-session";
+    if (purpose == (authoring ? addon::Structured_purpose::READ_ONLY_REVIEW : addon::Structured_purpose::IMPLEMENTATION))
+        return true;
+    context.fail(addon::Result_status::UNAVAILABLE, "purpose_unavailable");
     return false;
 }
 
@@ -143,17 +145,20 @@ void prepare(addon::Invocation_context& context)
     const auto request = addon::decode_structured_prepare_request(context.request().payload, &error);
     if (!request) { reject(context, error); return; }
     if (!purpose_supported(request->purpose, context)) return;
+    const bool authoring = context.request().capability.capability_id == "authoring-session";
     const auto& source = request->context;
     const auto invocation = addon::literal_launcher_invocation(source.launcher,
         source.launch_environment->platform_id, source.launcher_argv);
     const auto environment = addon::environment_pairs(source.launch_environment->effective_environment);
-    const auto selected_home = source.account_context ? resolve_home(environment, source.working_directory) : std::nullopt;
+    const auto selected_home = (source.account_context || authoring) ?
+        resolve_home(environment, source.working_directory) : std::nullopt;
     if (source.account_context && !matches_account(selected_home, *source.account_context)) {
         context.fail(addon::Result_status::UNAVAILABLE, "account_context_mismatch");
         return;
     }
     const auto parsed = invocation ? interactive_invocation(invocation->argv) : std::nullopt;
     if (!parsed || parsed->initial_prompt || parsed->saved_session ||
+        (authoring && invocation->argv.size() != 1) ||
         !addon::environment_value(environment, "VIBE_CWD").empty()) {
         context.fail(addon::Result_status::UNAVAILABLE, "vibe_task_launcher_unavailable");
         return;
@@ -163,7 +168,8 @@ void prepare(addon::Invocation_context& context)
         context.fail(addon::Result_status::FAILED, "vibe_task_prompt_invalid");
         return;
     }
-    if (!verified_program(invocation->argv.front(), environment, source.working_directory, context)) {
+    const auto program = verified_program(invocation->argv.front(), environment, source.working_directory, context);
+    if (!program) {
         context.fail(context.cancel_requested() ? addon::Result_status::CANCELLED : addon::Result_status::UNAVAILABLE,
             context.cancel_requested() ? "cancelled" : "vibe_task_version_unavailable",
             "The selected Mistral Vibe executable could not be verified.");
@@ -174,11 +180,30 @@ void prepare(addon::Invocation_context& context)
     result.account_context = source.account_context;
     result.process.executable = addon::Process_executable::launcher_program();
     result.process.argv = parsed->options;
+    if (authoring) {
+        if (!selected_home || !allows_text_authoring(*selected_home) ||
+            !allows_text_authoring(addon::path_from_utf8(source.working_directory) / ".vibe")) {
+            context.fail(addon::Result_status::UNAVAILABLE, "vibe_authoring_profile_unavailable");
+            return;
+        }
+        const auto help = addon::probe({addon::path_to_utf8(program->path), "--help"},
+            environment, source.working_directory, 5000, context);
+        if (!help || help->output.find("--disabled-tools") == std::string::npos) {
+            context.fail(context.cancel_requested() ? addon::Result_status::CANCELLED : addon::Result_status::UNAVAILABLE,
+                context.cancel_requested() ? "cancelled" : "vibe_authoring_tools_unavailable");
+            return;
+        }
+        result.process.argv = {"--disabled-tools", "*"};
+        result.process.environment = {{"VIBE_ENABLE_MCP", "false"}, {"VIBE_ENABLE_CONNECTORS", "false"},
+            {"VIBE_EXPERIMENTAL_ENABLE_REMOTE_PLUGINS", "false"}};
+    }
     result.process.argv.insert(result.process.argv.end(), {"--output", "streaming", "-p"});
     result.process.stdin_behavior = addon::Stdin_behavior::PAYLOAD;
     result.process.stdin_payload = *prompt;
     for (const auto& [name, value] : environment) {
         const auto lower = addon::lower(name);
+        if (authoring && (lower == "vibe_enable_mcp" || lower == "vibe_enable_connectors" ||
+            lower == "vibe_experimental_enable_remote_plugins")) continue;
         // These names belong to the interactive helper's routing authority,
         // not to the newly owned headless process.
         if (selected_home && lower == "vibe_home" && value.empty()) continue;
@@ -356,13 +381,14 @@ addon::Structured_inspect_result completed_failure(std::string reason)
     return result;
 }
 
-addon::Structured_inspect_result inspect_output(const addon::Structured_inspection& inspection)
+addon::Structured_inspect_result inspect_output(const addon::Structured_inspection& inspection, bool authoring)
 {
     auto state = decode_state(inspection.protocol_state);
     if (!state) return completed_failure("vibe_task_state_invalid");
     if (inspection.timed_out) return completed_failure("vibe_task_timed_out");
     Presentation_counts counts{};
     if (const auto failure = consume_output(*state, inspection.stdout_bytes, counts)) return completed_failure(*failure);
+    if (authoring && counts[3] > 0) return completed_failure("vibe_authoring_unexpected_effect");
     addon::Structured_inspect_result result;
     if (inspection.final) {
         if (inspection.exit_code != 0) {
@@ -403,7 +429,7 @@ void inspect(addon::Invocation_context& context)
     const auto request = addon::decode_structured_inspect_request(context.request().payload, &error);
     if (!request) { reject(context, error); return; }
     if (!purpose_supported(request->purpose, context)) return;
-    auto result = inspect_output(request->inspection);
+    auto result = inspect_output(request->inspection, context.request().capability.capability_id == "authoring-session");
     result.model_failure = request->model_failure;
     if (request->model_state_version == 1 && !result.model_failure) {
         // Native public history entries carry no model identity. Do not

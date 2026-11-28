@@ -476,6 +476,38 @@ class ProtocolTests(unittest.TestCase):
         self.assertNotIn(prompt.encode(), state)
         self.assertFalse((executable.parent / "unexpected-launch.txt").exists())
 
+    def test_text_authoring_retains_the_account_and_excludes_native_effects(self):
+        executable, environment = self.installed_cli()
+        environment["VIBE_ENABLE_MCP"] = "true"
+        request = self.preparation_request(executable, environment)
+        request.pop("title_instruction")
+        request["launcher"]["script_body"] = f'"{executable}"'
+        request["launcher_argv"] = [str(executable)]
+        request["account_context"] = self.selected_profile(request)
+        request.update(purpose="read_only_review", prompt_base64=base64.b64encode(b"Design a workflow").decode("ascii"))
+        transformed = self.success("managed-configuration", 1, "transform", {
+            "grant": "4" * 32, "present": False, "content_base64": "",
+        })
+        hooks = self.native_home / "hooks.toml"
+        hooks.write_bytes(base64.b64decode(transformed["content_base64"], validate=True))
+        prepared = self.success("authoring-session", 1, "prepare", request)
+        self.assertEqual(prepared["account_context"], request["account_context"])
+        process = prepared["process"]
+        self.assertEqual(process["argv"], ["--disabled-tools", "*", "--output", "streaming", "-p"])
+        self.assertEqual(process["environment"]["VNM_VIBE_HOOK"], "")
+        for name in ["VIBE_ENABLE_MCP", "VIBE_ENABLE_CONNECTORS", "VIBE_EXPERIMENTAL_ENABLE_REMOTE_PLUGINS"]:
+            self.assertEqual(process["environment"][name], "false")
+        self.assertEqual(self.adapter.invoke("authoring-session", 1, "prepare",
+            dict(request, purpose="implementation"))["reason"], "purpose_unavailable")
+        hooks.write_text('[[hooks]]\nname = "local"\ntype = "pre_agent"\ncommand = "echo local"\n', encoding="utf-8")
+        self.assertEqual(self.adapter.invoke("authoring-session", 1, "prepare", request)["status"], "unavailable")
+        hooks.unlink()
+        plugins = self.native_home / "plugins"
+        plugins.mkdir()
+        (plugins / "custom").mkdir()
+        self.assertEqual(self.adapter.invoke("authoring-session", 1, "prepare", request)["status"], "unavailable")
+        self.assertFalse((executable.parent / "unexpected-launch.txt").exists())
+
     def test_usage_storage_and_session_admission(self):
         executable, environment = self.installed_cli()
         request = self.preparation_request(executable, environment)

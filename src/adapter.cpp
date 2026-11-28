@@ -95,7 +95,7 @@ int main()
         {"context-state", 2},
         {"profile-storage", 1}, {"usage-scan", 3}, {"usage-session", 1}, {"usage-temporal", 1},
         {"conversation-export", 2},
-        {"structured-session", 3},
+        {"structured-session", 3}, {"authoring-session", 1},
         {"interactive-resume", 2}, {"interactive-resume", 3},
     };
     addon::Adapter_runtime runtime(std::move(options));
@@ -112,7 +112,8 @@ int main()
             else if (request.capability.capability_id == "usage-scan") vibe::handle_usage_scan(context);
             else if (request.capability.capability_id == "usage-session") vibe::handle_usage_session(context);
             else if (request.capability.capability_id == "conversation-export") vibe::handle_export(context);
-            else if (request.capability.capability_id == "structured-session") vibe::handle_tasks(context);
+            else if (request.capability.capability_id == "structured-session" ||
+                request.capability.capability_id == "authoring-session") vibe::handle_tasks(context);
             else if (request.capability.capability_id == "profile-storage" &&
                 request.operation == addon::k_profile_storage_acknowledge) addon::acknowledge_profile_storage(context);
             else vibe::handle_launcher(context);

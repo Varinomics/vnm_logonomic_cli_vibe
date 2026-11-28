@@ -21,7 +21,7 @@ int main(int argc, char** argv)
     }
     if (argc == 2 && std::string_view(argv[1]) == "--help") {
         std::cout << "Run the Mistral Vibe interactive CLI\n"
-                     "  --resume [SESSION_ID]\n  --continue\n  --agent AGENT\n";
+                     "  --resume [SESSION_ID]\n  --continue\n  --agent AGENT\n  --disabled-tools PATTERN\n";
         return 0;
     }
     if (argc >= 3 && std::string_view(argv[1]) == "provider-event") {

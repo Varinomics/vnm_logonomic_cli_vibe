@@ -39,6 +39,7 @@ fail their affected capability when the store contract is unfamiliar.
 | `usage-temporal@1` | Explicitly marks the available cumulative usage as unallocated by date. |
 | `conversation-export@2` | Full or compact plain text, Markdown, and highlighted conversation exports from an exact retained native source. |
 | `structured-session@3` | Prepares fresh implementation tasks and inspects their native streaming output through final process exit. |
+| `authoring-session@1` | Starts a fresh text-only headless turn with the selected account and model. Requires native wildcard tool exclusion. User-defined hooks, tools, agents and plugins must be absent from the selected Vibe profile and working directory. Standard Logonomic relay hooks are compatible. |
 | `interactive-resume@2` | Prepares the original full session ID with its native home and storage root, preserving supported launcher options. |
 | `interactive-resume@3` | Reads bounded native metadata and generation witnesses to inspect remembered-session availability without modifying history. |
 

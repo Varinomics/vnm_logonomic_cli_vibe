@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <fstream>
 #include <map>
 #include <stdexcept>
 #include <utility>
@@ -192,6 +193,39 @@ std::string hook_entry(std::string_view event, Hook_platform platform)
     if (std::find(events.begin(), events.end(), event) == events.end())
         throw std::invalid_argument("vibe_hook_event_unknown");
     return entry(event, platform, false, "\n");
+}
+
+bool allows_text_authoring(const std::filesystem::path& directory)
+{
+    namespace fs = std::filesystem;
+    std::error_code error;
+    for (const char* name : {"plugins", "tools", "agents"}) {
+        const auto path = directory / name;
+        if (fs::exists(path, error) && !fs::is_empty(path, error)) return false;
+        if (error) return false;
+    }
+    const auto file = directory / "hooks.toml";
+    if (!fs::exists(file, error)) return !error;
+    if (!fs::is_regular_file(file, error) || error) return false;
+    const auto size = fs::file_size(file, error);
+    if (error || size > 768u * 1024u) return false;
+    std::ifstream stream(file, std::ios::binary);
+    std::string bytes(static_cast<std::size_t>(size), '\0');
+    if (!stream.read(bytes.data(), static_cast<std::streamsize>(size)) ||
+        stream.peek() != std::ifstream::traits_type::eof() || stream.bad()) return false;
+    try {
+        const auto document = parse(bytes);
+        if (!document.contains("hooks")) return true;
+        const auto* hooks = document["hooks"].as_array();
+        const auto inert_command = hook_command();
+        return hooks && std::all_of(hooks->begin(), hooks->end(), [&](const toml::node& hook) {
+            const auto* table = hook.as_table();
+            return table && (*table)["command"].value<std::string>() == inert_command;
+        });
+    }
+    catch (const std::exception&) {
+        return false;
+    }
 }
 
 std::string updated_hooks(std::string original, Hook_platform platform)

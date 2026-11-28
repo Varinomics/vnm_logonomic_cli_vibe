@@ -1,0 +1,10 @@
+{
+  "capability_id": "authoring-session",
+  "version": 1,
+  "payload": {
+    "environment_names": [
+      "VIBE_HOME", "VIBE_CWD", "MISTRAL_API_KEY", "VIBE_ACTIVE_MODEL", "VIBE_PROVIDERS", "VIBE_MODELS",
+      "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "LANG", "LC_ALL", "TMPDIR"
+    ]
+  }
+}
